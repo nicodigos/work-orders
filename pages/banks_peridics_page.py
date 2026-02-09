@@ -207,31 +207,6 @@ def normalize_status_cell(v) -> str | None:
     return None
 
 # ==========================================
-# PIE CHARTS (GREEN / RED)
-# ==========================================
-PIE_COLORS = {"Done": "#2e7d32", "Pending": "#c62828"}
-
-def make_done_pending_pie(done: int, pending: int, title: str):
-    total = done + pending
-    if total == 0:
-        st.caption(f"{title}: n/a")
-        return
-
-    dfp = pd.DataFrame({"Status": ["Done", "Pending"], "Count": [done, pending]})
-    fig = px.pie(
-        dfp,
-        names="Status",
-        values="Count",
-        hole=0.55,
-        color="Status",
-        color_discrete_map=PIE_COLORS,
-        title=title,
-    )
-    fig.update_layout(height=170, margin=dict(l=10, r=10, t=35, b=10), showlegend=False)
-    fig.update_traces(textposition="inside", textinfo="percent")
-    st.plotly_chart(fig, use_container_width=True)
-
-# ==========================================
 # TABLE STYLING
 #   - Bank: colored if exact match in map
 #   - Address: dark gray background, white text
@@ -279,6 +254,56 @@ def style_table(df: pd.DataFrame, bank_col: str, addr_col: str):
         return styles
 
     return df.style.apply(_row_style, axis=1)
+
+# ==========================================
+# BAR CHART (DONE vs PENDING by column)
+# ==========================================
+def done_pending_by_column_barchart(df: pd.DataFrame, task_cols: list[str]):
+    if df.empty or not task_cols:
+        st.info("No data to summarize.")
+        return
+
+    rows = []
+    for c in task_cols:
+        norm = df[c].map(normalize_status_cell)
+        done = int((norm == "Done").sum())
+        pending = int((norm == "Pending").sum())
+        total = done + pending
+        if total == 0:
+            continue
+
+        rows.append({"Column": c, "Status": "Done", "Count": done, "Pct": done / total})
+        rows.append({"Column": c, "Status": "Pending", "Count": pending, "Pct": pending / total})
+
+    if not rows:
+        st.info("No Done/Pending values found in the current selection.")
+        return
+
+    g = pd.DataFrame(rows)
+    g["Label"] = (g["Pct"] * 100).round(0).astype(int).astype(str) + "%"
+
+    # Keep original column order
+    col_order = [c for c in task_cols if c in g["Column"].unique()]
+    g["Column"] = pd.Categorical(g["Column"], categories=col_order, ordered=True)
+
+    fig = px.bar(
+        g,
+        x="Column",
+        y="Count",
+        color="Status",
+        barmode="stack",
+        text="Label",
+        color_discrete_map={"Done": "#2e7d32", "Pending": "#c62828"},
+        title="Done vs Pending by Column (labels are % of Done/Pending)",
+    )
+    fig.update_traces(textposition="inside")
+    fig.update_layout(
+        xaxis_title="",
+        yaxis_title="Count",
+        legend_title_text="",
+        margin=dict(l=20, r=20, t=60, b=40),
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
 # LOAD FILE (auto-refresh every 3 hours)
@@ -336,27 +361,13 @@ addrs_to_use = addr_sel if addr_sel else addr_vals
 
 df = df_raw[df_raw[bank_col].isin(banks_to_use) & df_raw[addr_col].isin(addrs_to_use)]
 
-# ==========================================
-# PIES (COLUMN ORDER)
-# ==========================================
-st.subheader("Completion by column (Done vs Pending)")
-
 task_cols = [c for c in df_raw.columns if c not in {bank_col, addr_col}]
-for i in range(0, len(task_cols), 6):
-    block = task_cols[i : i + 6]
-    cols = st.columns(len(block))
-    for ui_col, c in zip(cols, block):
-        with ui_col:
-            ser = df[c] if not df.empty else pd.Series([], dtype=object)
-            norm = ser.map(normalize_status_cell)
-            done = int((norm == "Done").sum())
-            pending = int((norm == "Pending").sum())
 
-            title = str(c)
-            if len(title) > 22:
-                title = title[:21] + "…"
-
-            make_done_pending_pie(done, pending, title)
+# ==========================================
+# SINGLE BAR CHART SUMMARY
+# ==========================================
+st.subheader("Summary")
+done_pending_by_column_barchart(df, task_cols)
 
 # ==========================================
 # MATRIX
