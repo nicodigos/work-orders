@@ -294,7 +294,7 @@ def done_pending_by_column_barchart(df: pd.DataFrame, task_cols: list[str]):
         barmode="stack",
         text="Label",
         color_discrete_map={"Done": "#2e7d32", "Pending": "#c62828"},
-        title="Done vs Pending by Column (labels are % of Done/Pending)",
+        title="Completed by Work Type",
     )
     fig.update_traces(textposition="inside")
     fig.update_layout(
