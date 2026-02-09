@@ -37,7 +37,7 @@ SCOPES = ["User.Read", "Files.Read.All"]
 BANKS_REFRESH_SECONDS = 3 * 60 * 60  # 3 hours
 
 # ==========================================
-# TOKEN CACHE (disk) for silent auth after first login
+# TOKEN CACHE (disk) - SILENT ONLY (no login UI here)
 # ==========================================
 def _token_cache_path() -> Path:
     d = Path(tempfile.gettempdir()) / "cnet_reports"
@@ -60,30 +60,20 @@ def _msal_app(cache: msal.SerializableTokenCache) -> msal.PublicClientApplicatio
         raise RuntimeError("Missing TENANT_ID / CLIENT_ID in environment.")
     return msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY, token_cache=cache)
 
-def get_token_silent_or_device() -> str:
+def get_token_silent_only() -> str:
     cache = _load_cache()
     app = _msal_app(cache)
 
     accounts = app.get_accounts()
-    if accounts:
-        result = app.acquire_token_silent(SCOPES, account=accounts[0])
-        if result and "access_token" in result:
-            _save_cache(cache)
-            return result["access_token"]
+    if not accounts:
+        raise RuntimeError("Not authenticated. Please connect in the main app (app.py).")
 
-    flow = app.initiate_device_flow(scopes=SCOPES)
-    if "user_code" not in flow:
-        raise RuntimeError(str(flow))
+    result = app.acquire_token_silent(SCOPES, account=accounts[0])
+    if result and "access_token" in result:
+        _save_cache(cache)
+        return result["access_token"]
 
-    with st.expander("Microsoft sign-in required", expanded=True):
-        st.info(f"Open {flow['verification_uri']} and enter code: {flow['user_code']}")
-
-    result = app.acquire_token_by_device_flow(flow)
-    if "access_token" not in result:
-        raise RuntimeError(str(result))
-
-    _save_cache(cache)
-    return result["access_token"]
+    raise RuntimeError("Session expired. Please reconnect in the main app (app.py).")
 
 # ==========================================
 # GRAPH HELPERS
@@ -111,7 +101,7 @@ def resolve_drive_id(token: str) -> str:
 
 @st.cache_data(show_spinner=False, ttl=BANKS_REFRESH_SECONDS)
 def download_banks_excel_cached(sp_relative_path: str) -> str:
-    token = get_token_silent_or_device()
+    token = get_token_silent_only()
     drive_id = resolve_drive_id(token)
     url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{sp_relative_path}:/content"
     content = graph_download(url, token)
@@ -297,7 +287,7 @@ try:
     with st.spinner("Syncing banks data..."):
         local_path = download_banks_excel_cached(BANKS_SP_PATH)
 except Exception as e:
-    st.error(f"Could not sync banks Excel: {e}")
+    st.error(str(e))
     st.stop()
 
 EXCEL_PATH_LOCAL = Path(local_path)
@@ -340,6 +330,7 @@ with c1:
 with c2:
     addr_sel = st.multiselect("Filter: Address", options=addr_vals, default=[])
 
+# Empty selection means include all
 banks_to_use = bank_sel if bank_sel else bank_vals
 addrs_to_use = addr_sel if addr_sel else addr_vals
 
