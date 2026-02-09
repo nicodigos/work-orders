@@ -3,11 +3,11 @@ import os
 import tempfile
 from pathlib import Path
 
+import msal
 import pandas as pd
 import plotly.express as px
-import streamlit as st
-import msal
 import requests
+import streamlit as st
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -51,7 +51,7 @@ PRIORITY_COLORS = {"High": "#d32f2f", "Medium": "#fbc02d", "Low": "#388e3c"}
 PRIORITY_COLORS_LIGHT = {"High": "#f28b82", "Medium": "#ffe082", "Low": "#a5d6a7"}
 
 # ==========================================
-# TOKEN CACHE (disk) for silent auth after first login
+# TOKEN CACHE (disk) - SILENT ONLY (no login UI here)
 # ==========================================
 def _token_cache_path() -> Path:
     d = Path(tempfile.gettempdir()) / "cnet_reports"
@@ -74,30 +74,20 @@ def _msal_app(cache: msal.SerializableTokenCache) -> msal.PublicClientApplicatio
         raise RuntimeError("Missing TENANT_ID / CLIENT_ID in environment.")
     return msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY, token_cache=cache)
 
-def get_token_silent_or_device() -> str:
+def get_token_silent_only() -> str:
     cache = _load_cache()
     app = _msal_app(cache)
 
     accounts = app.get_accounts()
-    if accounts:
-        result = app.acquire_token_silent(SCOPES, account=accounts[0])
-        if result and "access_token" in result:
-            _save_cache(cache)
-            return result["access_token"]
+    if not accounts:
+        raise RuntimeError("Not authenticated. Please connect in the main app (app.py).")
 
-    flow = app.initiate_device_flow(scopes=SCOPES)
-    if "user_code" not in flow:
-        raise RuntimeError(str(flow))
+    result = app.acquire_token_silent(SCOPES, account=accounts[0])
+    if result and "access_token" in result:
+        _save_cache(cache)
+        return result["access_token"]
 
-    with st.expander("Microsoft sign-in required", expanded=True):
-        st.info(f"Open {flow['verification_uri']} and enter code: {flow['user_code']}")
-
-    result = app.acquire_token_by_device_flow(flow)
-    if "access_token" not in result:
-        raise RuntimeError(str(result))
-
-    _save_cache(cache)
-    return result["access_token"]
+    raise RuntimeError("Session expired. Please reconnect in the main app (app.py).")
 
 # ==========================================
 # GRAPH HELPERS
@@ -125,7 +115,7 @@ def resolve_drive_id(token: str) -> str:
 
 @st.cache_data(show_spinner=False, ttl=TICKETS_REFRESH_SECONDS)
 def download_tickets_excel_cached(sp_relative_path: str) -> str:
-    token = get_token_silent_or_device()
+    token = get_token_silent_only()
     drive_id = resolve_drive_id(token)
     url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{sp_relative_path}:/content"
     content = graph_download(url, token)
@@ -358,7 +348,7 @@ try:
     with st.spinner("Syncing tickets data..."):
         local_path = download_tickets_excel_cached(TICKETS_SP_PATH)
 except Exception as e:
-    st.error(f"Could not sync tickets Excel: {e}")
+    st.error(str(e))
     st.stop()
 
 EXCEL_PATH = Path(local_path)
