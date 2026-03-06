@@ -926,7 +926,7 @@ elif st.session_state["bank_periodics_view"] == "Report Matrix":
     st.caption(f"Current status: {current_status_matrix if not _is_blank(current_status_matrix) else '(empty)'}")
     new_status_matrix = st.selectbox(
         "New status",
-        options=["Pending", "Done", "Not Schedule", "Not Scheduled"],
+        options=["Done"],
         index=0,
         key="matrix_edit_new_status",
     )
@@ -1012,7 +1012,7 @@ else:
 
                 new_status = st.selectbox(
                     "New status",
-                    options=["Done", "Not Schedule", "Not Scheduled"],
+                    options=["Done"],
                     index=0,
                     key="edit_new_status",
                 )
