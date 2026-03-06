@@ -18,8 +18,8 @@ from utils.ms_graph_excel import (
 # ==========================================
 # PAGE CONFIG
 # ==========================================
-st.set_page_config(page_title="Pagos Periodos One Shots", layout="wide")
-st.title("Pagos Periodos One Shots")
+st.set_page_config(page_title="One-Shot Period Payments", layout="wide")
+st.title("One-Shot Period Payments")
 
 # ==========================================
 # ENV
@@ -264,7 +264,7 @@ for f in files:
                 unsafe_allow_html=True,
             )
 
-    with st.expander("Ver tabla", expanded=False):
+    with st.expander("View table", expanded=False):
 
         def color_rows_by_status(row: pd.Series):
             raw = row.get(status_col, pd.NA)

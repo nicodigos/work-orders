@@ -171,7 +171,7 @@ def style_by_priority(df: pd.DataFrame):
 # ==========================================
 def open_stacked_chart(df: pd.DataFrame, status_col: str, title: str):
     if df.empty:
-        thumb_card("0 tickets pendientes")
+        thumb_card("0 pending tickets")
         return
 
     g = df.groupby(["Priority", status_col]).size().reset_index(name="Count")
@@ -200,7 +200,7 @@ def open_stacked_chart(df: pd.DataFrame, status_col: str, title: str):
 
 def closed_pie_chart(df: pd.DataFrame, title: str):
     if df.empty:
-        thumb_card("0 tickets cerrados")
+        thumb_card("0 closed tickets")
         return
 
     g = df.groupby("Priority").size().reset_index(name="Count")

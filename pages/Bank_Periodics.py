@@ -484,7 +484,7 @@ def map_dataset_from_left_join_by_location(
     out["Longitude"] = pd.to_numeric(out["Longitude"], errors="coerce")
     out = out.dropna(subset=["Latitude", "Longitude"])
     out["Label"] = out["PendingCount"].astype(str)
-    out["Status"] = out["PendingCount"].map(lambda x: "Pendientes" if int(x) > 0 else "Not Pending")
+    out["Status"] = out["PendingCount"].map(lambda x: "Pending" if int(x) > 0 else "Not Pending")
     return out
 
 
@@ -733,9 +733,9 @@ if st.session_state["bank_periodics_view"] == "Report":
     if map_df.empty:
         st.info("Could not build map data from `Masters`.")
     else:
-        status_options = ["Pendientes", "Not Pending"]
+        status_options = ["Pending", "Not Pending"]
         selected_statuses = st.multiselect(
-            "Estado",
+            "Status",
             options=status_options,
             default=status_options,
             key="report_map_status_filter",
