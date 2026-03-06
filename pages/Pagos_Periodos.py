@@ -6,10 +6,14 @@ import tempfile
 from pathlib import Path
 from urllib.parse import quote
 
-import msal
 import pandas as pd
-import requests
 import streamlit as st
+from utils.ms_graph_excel import (
+    download_drive_item_content,
+    get_token_silent_or_raise,
+    list_children_by_path,
+    resolve_drive_id,
+)
 
 # ==========================================
 # PAGE CONFIG
@@ -20,16 +24,6 @@ st.title("Pagos Periodos One Shots")
 # ==========================================
 # ENV
 # ==========================================
-TENANT_ID = os.getenv("TENANT_ID")
-CLIENT_ID = os.getenv("CLIENT_ID")
-
-SP_HOSTNAME = os.getenv("SP_HOSTNAME")
-SP_SITE_PATH = os.getenv("SP_SITE_PATH")
-SP_DRIVE_NAME = os.getenv("SP_DRIVE_NAME", "Documents")
-
-AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
-SCOPES = ["User.Read", "Files.Read.All"]
-
 BASE_SP_DIR = os.getenv(
     "SP_PAGOS_PERIODOS_DIR",
     "General/12433087 CANADA INC-MASTER/09-Pagos Periodos",
@@ -69,87 +63,6 @@ def normalize_status_series(s: pd.Series) -> pd.Series:
     s2 = s2.apply(lambda v: v if pd.isna(v) else str(v).strip())
     s2 = s2.replace({"": pd.NA, "nan": pd.NA, "NaN": pd.NA})
     return s2
-
-# ==========================================
-# TOKEN CACHE
-# ==========================================
-def _token_cache_path() -> Path:
-    d = Path(tempfile.gettempdir()) / "cnet_reports"
-    d.mkdir(exist_ok=True)
-    return d / "msal_token_cache.bin"
-
-def _load_cache():
-    cache = msal.SerializableTokenCache()
-    p = _token_cache_path()
-    if p.exists():
-        cache.deserialize(p.read_text(encoding="utf-8"))
-    return cache
-
-def _save_cache(cache):
-    if cache.has_state_changed:
-        _token_cache_path().write_text(cache.serialize(), encoding="utf-8")
-
-def _msal_app(cache):
-    if not TENANT_ID or not CLIENT_ID:
-        raise RuntimeError("Missing TENANT_ID / CLIENT_ID.")
-    return msal.PublicClientApplication(
-        CLIENT_ID, authority=AUTHORITY, token_cache=cache
-    )
-
-def get_token_silent_only():
-    cache = _load_cache()
-    app = _msal_app(cache)
-
-    accounts = app.get_accounts()
-    if not accounts:
-        raise RuntimeError("Not authenticated.")
-
-    result = app.acquire_token_silent(SCOPES, account=accounts[0])
-    if result and "access_token" in result:
-        _save_cache(cache)
-        return result["access_token"]
-
-    raise RuntimeError("Session expired.")
-
-# ==========================================
-# GRAPH HELPERS
-# ==========================================
-def graph_get(url: str, token: str):
-    r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=60)
-    if r.status_code >= 400:
-        raise RuntimeError(r.text)
-    return r.json()
-
-def graph_download(url: str, token: str):
-    r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=120)
-    if r.status_code >= 400:
-        raise RuntimeError(r.text)
-    return r.content
-
-def resolve_drive_id(token: str):
-    site = graph_get(
-        f"https://graph.microsoft.com/v1.0/sites/{SP_HOSTNAME}:{SP_SITE_PATH}",
-        token,
-    )
-    drives = graph_get(
-        f"https://graph.microsoft.com/v1.0/sites/{site['id']}/drives",
-        token,
-    )["value"]
-    drive = next((d for d in drives if d.get("name") == SP_DRIVE_NAME), drives[0])
-    return drive["id"]
-
-def list_children_by_path(drive_id: str, sp_path: str, token: str):
-    sp_path_enc = quote(sp_path.strip("/"), safe="/")
-    url = (
-        f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{sp_path_enc}:/children"
-        f"?$top=200&$select=id,name,folder,file,webUrl"
-    )
-    out = []
-    while url:
-        data = graph_get(url, token)
-        out.extend(data.get("value", []))
-        url = data.get("@odata.nextLink")
-    return out
 
 def is_folder(it: dict) -> bool:
     return "folder" in it
@@ -221,7 +134,10 @@ def read_oneshot_from_bytes(xlsx_bytes: bytes):
 # ==========================================
 @st.cache_data(ttl=600)
 def list_excel_files(base_dir: str):
-    token = get_token_silent_only()
+    token = get_token_silent_or_raise(
+        "Not authenticated. Please connect in the main app (app.py).",
+        "Session expired. Please reconnect in the main app (app.py).",
+    )
     drive_id = resolve_drive_id(token)
 
     results = []
@@ -285,6 +201,11 @@ else:
 # ==========================================
 # RENDER
 # ==========================================
+token = get_token_silent_or_raise(
+    "Not authenticated. Please connect in the main app (app.py).",
+    "Session expired. Please reconnect in the main app (app.py).",
+)
+
 for f in files:
     title = f"{f['year']} / {f['month']} — {f['name']}"
 
@@ -308,10 +229,7 @@ for f in files:
         st.markdown(f"### {title}")
 
     try:
-        xbytes = graph_download(
-            f"https://graph.microsoft.com/v1.0/drives/{f['drive_id']}/items/{f['item_id']}/content",
-            get_token_silent_only(),
-        )
+        xbytes = download_drive_item_content(f["drive_id"], f["item_id"], token)
         df = read_oneshot_from_bytes(xbytes)
     except Exception as e:
         st.error(f"{title}: {e}")

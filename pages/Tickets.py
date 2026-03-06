@@ -1,16 +1,15 @@
-# pages/tickets_page.py
 import os
-import tempfile
 from pathlib import Path
 
-import msal
 import pandas as pd
 import plotly.express as px
-import requests
 import streamlit as st
-from dotenv import load_dotenv
-
-load_dotenv()
+from utils.ms_graph_excel import (
+    download_sharepoint_file_bytes,
+    get_token_silent_or_raise,
+    resolve_drive_id,
+    write_temp_file,
+)
 
 # ==========================================
 # PAGE CONFIG
@@ -21,20 +20,10 @@ st.title("Tickets")
 # ==========================================
 # ENV (SharePoint file path + refresh cadence)
 # ==========================================
-TENANT_ID = os.getenv("TENANT_ID")
-CLIENT_ID = os.getenv("CLIENT_ID")
-
-SP_HOSTNAME = os.getenv("SP_HOSTNAME")      # groupcastillo.sharepoint.com
-SP_SITE_PATH = os.getenv("SP_SITE_PATH")    # /sites/GroupCastilloTeamSite
-SP_DRIVE_NAME = os.getenv("SP_DRIVE_NAME", "Documents")
-
 TICKETS_SP_PATH = os.getenv(
     "SP_FILE_PATH",
     "General/12433087 CANADA INC-MASTER/21-Work Orders-Complaints-Request/WorkOrders-Complaints-Master-2025-v1.xlsm"
 )
-
-AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
-SCOPES = ["User.Read", "Files.Read.All"]
 
 TICKETS_REFRESH_SECONDS = 30 * 60  # 30 minutes
 
@@ -50,81 +39,15 @@ SHEETS = {
 PRIORITY_COLORS = {"High": "#d32f2f", "Medium": "#fbc02d", "Low": "#388e3c"}
 PRIORITY_COLORS_LIGHT = {"High": "#f28b82", "Medium": "#ffe082", "Low": "#a5d6a7"}
 
-# ==========================================
-# TOKEN CACHE (disk) - SILENT ONLY (no login UI here)
-# ==========================================
-def _token_cache_path() -> Path:
-    d = Path(tempfile.gettempdir()) / "cnet_reports"
-    d.mkdir(exist_ok=True)
-    return d / "msal_token_cache.bin"
-
-def _load_cache() -> msal.SerializableTokenCache:
-    cache = msal.SerializableTokenCache()
-    p = _token_cache_path()
-    if p.exists():
-        cache.deserialize(p.read_text(encoding="utf-8"))
-    return cache
-
-def _save_cache(cache: msal.SerializableTokenCache):
-    if cache.has_state_changed:
-        _token_cache_path().write_text(cache.serialize(), encoding="utf-8")
-
-def _msal_app(cache: msal.SerializableTokenCache) -> msal.PublicClientApplication:
-    if not TENANT_ID or not CLIENT_ID:
-        raise RuntimeError("Missing TENANT_ID / CLIENT_ID in environment.")
-    return msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY, token_cache=cache)
-
-def get_token_silent_only() -> str:
-    cache = _load_cache()
-    app = _msal_app(cache)
-
-    accounts = app.get_accounts()
-    if not accounts:
-        raise RuntimeError("Not authenticated. Please connect in the main app (app.py).")
-
-    result = app.acquire_token_silent(SCOPES, account=accounts[0])
-    if result and "access_token" in result:
-        _save_cache(cache)
-        return result["access_token"]
-
-    raise RuntimeError("Session expired. Please reconnect in the main app (app.py).")
-
-# ==========================================
-# GRAPH HELPERS
-# ==========================================
-def graph_get(url: str, token: str):
-    r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=60)
-    if r.status_code >= 400:
-        raise RuntimeError(r.text)
-    return r.json()
-
-def graph_download(url: str, token: str) -> bytes:
-    r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=120)
-    if r.status_code >= 400:
-        raise RuntimeError(r.text)
-    return r.content
-
-def resolve_drive_id(token: str) -> str:
-    if not SP_HOSTNAME or not SP_SITE_PATH:
-        raise RuntimeError("Missing SP_HOSTNAME / SP_SITE_PATH in environment.")
-
-    site = graph_get(f"https://graph.microsoft.com/v1.0/sites/{SP_HOSTNAME}:{SP_SITE_PATH}", token)
-    drives = graph_get(f"https://graph.microsoft.com/v1.0/sites/{site['id']}/drives", token)["value"]
-    drive = next((d for d in drives if d.get("name") == SP_DRIVE_NAME), drives[0])
-    return drive["id"]
-
 @st.cache_data(show_spinner=False, ttl=TICKETS_REFRESH_SECONDS)
 def download_tickets_excel_cached(sp_relative_path: str) -> str:
-    token = get_token_silent_only()
+    token = get_token_silent_or_raise(
+        "Not authenticated. Please connect in the main app (app.py).",
+        "Session expired. Please reconnect in the main app (app.py).",
+    )
     drive_id = resolve_drive_id(token)
-    url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{sp_relative_path}:/content"
-    content = graph_download(url, token)
-
-    out_dir = Path(tempfile.gettempdir()) / "cnet_reports"
-    out_dir.mkdir(exist_ok=True)
-    local = out_dir / Path(sp_relative_path).name
-    local.write_bytes(content)
-    return str(local)
+    content = download_sharepoint_file_bytes(sp_relative_path, token, drive_id=drive_id)
+    return write_temp_file(Path(sp_relative_path).name, content)
 
 # ==========================================
 # SMALL UI HELPERS
