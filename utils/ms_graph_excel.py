@@ -12,28 +12,23 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SCOPES = ["User.Read", "Files.Read.All"]
+MSAL_SESSION_CACHE_KEY = "msal_token_cache_serialized"
 
 
 # -------------------------
-# TOKEN CACHE (disk)
+# TOKEN CACHE (per Streamlit user session)
 # -------------------------
-def _cache_path() -> Path:
-    d = Path(tempfile.gettempdir()) / "cnet_reports"
-    d.mkdir(exist_ok=True)
-    return d / "msal_token_cache.bin"
-
-
 def _load_cache() -> msal.SerializableTokenCache:
     cache = msal.SerializableTokenCache()
-    p = _cache_path()
-    if p.exists():
-        cache.deserialize(p.read_text(encoding="utf-8"))
+    serialized = st.session_state.get(MSAL_SESSION_CACHE_KEY)
+    if serialized:
+        cache.deserialize(str(serialized))
     return cache
 
 
 def _save_cache(cache: msal.SerializableTokenCache) -> None:
     if cache.has_state_changed:
-        _cache_path().write_text(cache.serialize(), encoding="utf-8")
+        st.session_state[MSAL_SESSION_CACHE_KEY] = cache.serialize()
 
 
 def _msal_app(cache: msal.SerializableTokenCache) -> msal.PublicClientApplication:
