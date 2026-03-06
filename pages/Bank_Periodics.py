@@ -653,6 +653,11 @@ if not visible_sheets:
     st.error("No visible sheets found.")
     st.stop()
 
+month_sheets = [s for s in visible_sheets if str(s).strip().lower() != "masters"]
+if not month_sheets:
+    st.error("No month sheets found.")
+    st.stop()
+
 views = ["Edit Status", "Report", "Report Matrix"]
 if "bank_periodics_view" not in st.session_state:
     st.session_state["bank_periodics_view"] = "Edit Status"
@@ -686,10 +691,10 @@ st.markdown(
 
 if st.session_state["bank_periodics_view"] == "Report":
     sheet = st.selectbox(
-        "Sheet",
-        options=visible_sheets,
+        "Month",
+        options=month_sheets,
         key="report_sheet",
-        index=default_last_month_index(visible_sheets),
+        index=default_last_month_index(month_sheets),
     )
     header_row = detect_header_row(str(EXCEL_PATH_LOCAL), sheet)
     df_raw = read_sheet_with_detected_header(str(EXCEL_PATH_LOCAL), sheet, header_row)
@@ -707,19 +712,6 @@ if st.session_state["bank_periodics_view"] == "Report":
     df_raw[bank_col] = to_text_series(df_raw[bank_col])
     df_raw[addr_col] = to_text_series(df_raw[addr_col])
 
-    bank_vals = sorted(df_raw[bank_col].dropna().unique().tolist())
-    addr_vals = sorted(df_raw[addr_col].dropna().unique().tolist())
-
-    c1, c2 = st.columns(2)
-    with c1:
-        bank_sel = st.multiselect("Filter: Bank", options=bank_vals, default=[])
-    with c2:
-        addr_sel = st.multiselect("Filter: Address", options=addr_vals, default=[])
-
-    banks_to_use = bank_sel if bank_sel else bank_vals
-    addrs_to_use = addr_sel if addr_sel else addr_vals
-
-    df = df_raw[df_raw[bank_col].isin(banks_to_use) & df_raw[addr_col].isin(addrs_to_use)]
     task_cols = [c for c in df_raw.columns if c not in {bank_col, addr_col}]
 
     st.subheader("Map")
@@ -799,16 +791,28 @@ if st.session_state["bank_periodics_view"] == "Report":
         st_folium(folium_map, width=None, height=700)
 
     st.subheader("Summary")
+    bank_vals = sorted(df_raw[bank_col].dropna().unique().tolist())
+    addr_vals = sorted(df_raw[addr_col].dropna().unique().tolist())
+
+    c1, c2 = st.columns(2)
+    with c1:
+        bank_sel = st.multiselect("Filter: Bank", options=bank_vals, default=[])
+    with c2:
+        addr_sel = st.multiselect("Filter: Address", options=addr_vals, default=[])
+
+    banks_to_use = bank_sel if bank_sel else bank_vals
+    addrs_to_use = addr_sel if addr_sel else addr_vals
+    df = df_raw[df_raw[bank_col].isin(banks_to_use) & df_raw[addr_col].isin(addrs_to_use)]
     done_pending_by_column_barchart(df, task_cols)
 
 elif st.session_state["bank_periodics_view"] == "Report Matrix":
     st.subheader("Report Matrix")
 
     sheet_matrix = st.selectbox(
-        "Sheet",
-        options=visible_sheets,
+        "Month",
+        options=month_sheets,
         key="matrix_sheet",
-        index=default_last_month_index(visible_sheets),
+        index=default_last_month_index(month_sheets),
     )
     header_row_matrix = detect_header_row(str(EXCEL_PATH_LOCAL), sheet_matrix)
     df_matrix_raw = read_sheet_with_detected_header(str(EXCEL_PATH_LOCAL), sheet_matrix, header_row_matrix)
@@ -921,10 +925,10 @@ else:
     st.subheader("Update Bank Service Status")
 
     sheet_edit = st.selectbox(
-        "Sheet",
-        options=visible_sheets,
+        "Month",
+        options=month_sheets,
         key="edit_sheet",
-        index=default_last_month_index(visible_sheets),
+        index=default_last_month_index(month_sheets),
     )
     header_row_edit = detect_header_row(str(EXCEL_PATH_LOCAL), sheet_edit)
     df_edit = read_sheet_with_detected_header(str(EXCEL_PATH_LOCAL), sheet_edit, header_row_edit)
