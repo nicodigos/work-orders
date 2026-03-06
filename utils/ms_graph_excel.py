@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -134,15 +135,50 @@ def graph_download(url: str, token: str) -> bytes:
 
 
 def graph_put_bytes(url: str, token: str, content: bytes) -> dict:
-    r = requests.put(
-        url,
-        headers={"Authorization": f"Bearer {token}"},
-        data=content,
-        timeout=120,
-    )
-    if r.status_code >= 400:
-        raise RuntimeError(r.text)
-    return r.json() if r.content else {}
+    max_retries = 6
+    base_sleep_seconds = 0.8
+
+    def _graph_error_details(resp: requests.Response) -> tuple[str | None, str | None, str]:
+        try:
+            payload = resp.json()
+        except Exception:
+            return None, None, resp.text
+        error = payload.get("error", {}) if isinstance(payload, dict) else {}
+        code = error.get("code")
+        inner = error.get("innerError", {}) if isinstance(error.get("innerError", {}), dict) else {}
+        inner_code = inner.get("code")
+        message = error.get("message") or resp.text
+        return code, inner_code, str(message)
+
+    for attempt in range(max_retries + 1):
+        r = requests.put(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            data=content,
+            timeout=120,
+        )
+        if r.status_code < 400:
+            return r.json() if r.content else {}
+
+        code, inner_code, message = _graph_error_details(r)
+        locked = (
+            r.status_code in (409, 423)
+            or code == "resourceLocked"
+            or inner_code == "resourceLocked"
+            or (code == "notAllowed" and "lock" in message.lower())
+        )
+        if locked and attempt < max_retries:
+            time.sleep(base_sleep_seconds * (2**attempt))
+            continue
+
+        if locked:
+            raise RuntimeError(
+                "SharePoint file is locked by another user or session. "
+                "Close the file in Excel and try again in a few seconds."
+            )
+        raise RuntimeError(message)
+
+    raise RuntimeError("Unexpected upload error.")
 
 
 def resolve_drive_id(token: str) -> str:
