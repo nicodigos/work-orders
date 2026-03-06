@@ -3,6 +3,7 @@ import tempfile
 import time
 from pathlib import Path
 from urllib.parse import quote
+from urllib.parse import urlparse
 
 import msal
 import requests
@@ -66,6 +67,33 @@ def _msal_app_for_silent(cache: msal.SerializableTokenCache):
     if client_secret:
         return _msal_confidential_app(cache)
     return _msal_public_app(cache)
+
+
+def _resolve_redirect_uri() -> str:
+    env_redirect = os.getenv("REDIRECT_URI", "").strip()
+
+    host = ""
+    try:
+        host = str(st.context.headers.get("host", "")).strip()
+    except Exception:
+        host = ""
+
+    if host:
+        is_local = host.startswith("localhost") or host.startswith("127.0.0.1")
+        inferred = f"{'http' if is_local else 'https'}://{host}/"
+        if env_redirect:
+            try:
+                env_host = urlparse(env_redirect).netloc.lower()
+            except Exception:
+                env_host = ""
+            if env_host and env_host != host.lower():
+                return inferred
+            return env_redirect
+        return inferred
+
+    if env_redirect:
+        return env_redirect
+    raise RuntimeError("Missing REDIRECT_URI in environment.")
 
 
 # -------------------------
@@ -138,9 +166,7 @@ def finish_device_flow(
 def get_redirect_login_url(state: str) -> str:
     cache = _load_cache()
     app = _msal_confidential_app(cache)
-    redirect_uri = os.getenv("REDIRECT_URI")
-    if not redirect_uri:
-        raise RuntimeError("Missing REDIRECT_URI in environment.")
+    redirect_uri = _resolve_redirect_uri()
     return app.get_authorization_request_url(
         SCOPES,
         redirect_uri=redirect_uri,
@@ -152,9 +178,7 @@ def get_redirect_login_url(state: str) -> str:
 def finish_redirect_flow(auth_code: str) -> str:
     cache = _load_cache()
     app = _msal_confidential_app(cache)
-    redirect_uri = os.getenv("REDIRECT_URI")
-    if not redirect_uri:
-        raise RuntimeError("Missing REDIRECT_URI in environment.")
+    redirect_uri = _resolve_redirect_uri()
 
     result = app.acquire_token_by_authorization_code(
         code=auth_code,
