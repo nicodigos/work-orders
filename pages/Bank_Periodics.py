@@ -575,6 +575,50 @@ def update_service_status_in_workbook(
     return out.getvalue()
 
 
+def read_service_status_from_workbook_bytes(
+    workbook_bytes: bytes,
+    sheet_name: str,
+    bank_col: str,
+    addr_col: str,
+    service_col: str,
+    bank_value: str,
+    address_value: str,
+):
+    with io.BytesIO(workbook_bytes) as bio:
+        wb = load_workbook(filename=bio, data_only=True)
+
+    if sheet_name not in wb.sheetnames:
+        raise RuntimeError(f"Sheet '{sheet_name}' not found.")
+
+    ws = wb[sheet_name]
+    tmp_path = write_temp_file("_banks_verify_source.xlsx", workbook_bytes)
+    header_row_zero_based = detect_header_row(tmp_path, sheet_name)
+    header_excel_row = header_row_zero_based + 1
+
+    header_to_col_idx: dict[str, int] = {}
+    for col_idx in range(1, ws.max_column + 1):
+        hv = ws.cell(row=header_excel_row, column=col_idx).value
+        htxt = str(hv).strip() if hv is not None else ""
+        if htxt and htxt not in header_to_col_idx:
+            header_to_col_idx[htxt] = col_idx
+
+    missing = [c for c in [bank_col, addr_col, service_col] if c not in header_to_col_idx]
+    if missing:
+        raise RuntimeError(f"Columns not found in worksheet header row: {missing}")
+
+    bank_idx = header_to_col_idx[bank_col]
+    addr_idx = header_to_col_idx[addr_col]
+    service_idx = header_to_col_idx[service_col]
+
+    for r in range(header_excel_row + 1, ws.max_row + 1):
+        bval = ws.cell(row=r, column=bank_idx).value
+        aval = ws.cell(row=r, column=addr_idx).value
+        if _norm_txt(bval) == _norm_txt(bank_value) and _norm_txt(aval) == _norm_txt(address_value):
+            return ws.cell(row=r, column=service_idx).value
+
+    raise RuntimeError("Could not locate the selected Bank + Address row in worksheet.")
+
+
 def save_status_change_to_sharepoint(
     sheet_name: str,
     bank_col: str,
@@ -602,6 +646,23 @@ def save_status_change_to_sharepoint(
         new_status=new_status,
     )
     upload_sharepoint_file_bytes(BANKS_SP_PATH, updated_bytes, token, drive_id=drive_id)
+
+    # Verify persisted write from SharePoint source, not local cache.
+    persisted_bytes = download_sharepoint_file_bytes(BANKS_SP_PATH, token, drive_id=drive_id)
+    persisted_value = read_service_status_from_workbook_bytes(
+        workbook_bytes=persisted_bytes,
+        sheet_name=sheet_name,
+        bank_col=bank_col,
+        addr_col=addr_col,
+        service_col=service_col,
+        bank_value=bank_value,
+        address_value=address_value,
+    )
+    if _norm_txt(persisted_value) != _norm_txt(new_status):
+        raise RuntimeError(
+            "Update did not persist to SharePoint file. "
+            f"Expected '{new_status}', found '{persisted_value}'."
+        )
 
     download_banks_excel_cached.clear()
     get_visible_sheet_names.clear()
