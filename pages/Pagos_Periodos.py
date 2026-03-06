@@ -12,6 +12,7 @@ from utils.ms_graph_excel import (
     download_drive_item_content,
     get_token_silent_or_raise,
     list_children_by_path,
+    require_graph_login,
     resolve_drive_id,
 )
 
@@ -20,6 +21,7 @@ from utils.ms_graph_excel import (
 # ==========================================
 st.set_page_config(page_title="One-Shot Period Payments", layout="wide")
 st.title("One-Shot Period Payments")
+require_graph_login()
 
 # ==========================================
 # ENV

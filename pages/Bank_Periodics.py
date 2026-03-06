@@ -14,6 +14,7 @@ from streamlit_folium import st_folium
 from utils.ms_graph_excel import (
     download_sharepoint_file_bytes,
     get_token_silent_or_raise,
+    require_graph_login,
     resolve_drive_id,
     upload_sharepoint_file_bytes,
     write_temp_file,
@@ -24,6 +25,7 @@ from utils.ms_graph_excel import (
 # ==========================================
 st.set_page_config(page_title="Banks Periodics", layout="wide")
 st.title("Banks Periodics")
+require_graph_login()
 
 # ==========================================
 # ENV (SharePoint file path + refresh cadence)

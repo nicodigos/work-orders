@@ -63,6 +63,17 @@ def get_token_silent() -> str | None:
     return None
 
 
+def require_graph_login() -> str:
+    token = get_token_silent()
+    if token:
+        st.session_state["graph_token"] = token
+        return token
+
+    st.error("Not authenticated with Microsoft Graph.")
+    st.info("Open the home page (`app.py`) and click `Connect to Microsoft`.")
+    st.stop()
+
+
 def get_token_silent_or_raise(not_authenticated_message: str, expired_message: str) -> str:
     cache = _load_cache()
     app = _msal_app(cache)

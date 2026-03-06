@@ -7,6 +7,7 @@ import streamlit as st
 from utils.ms_graph_excel import (
     download_sharepoint_file_bytes,
     get_token_silent_or_raise,
+    require_graph_login,
     resolve_drive_id,
     write_temp_file,
 )
@@ -16,6 +17,7 @@ from utils.ms_graph_excel import (
 # ==========================================
 st.set_page_config(page_title="Tickets", layout="wide")
 st.title("Tickets")
+require_graph_login()
 
 # ==========================================
 # ENV (SharePoint file path + refresh cadence)
