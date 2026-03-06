@@ -33,7 +33,7 @@ BANKS_SP_PATH = os.getenv(
     "General/9359-6633 QUEBEC INC/BGIS/Banks Periodics/2026.xlsx",
 )
 
-BANKS_REFRESH_SECONDS = 3 * 60 * 60  # 3 hours
+BANKS_REFRESH_SECONDS = 24 * 60 * 60  # 24 hours
 
 
 @st.cache_data(show_spinner=False, ttl=BANKS_REFRESH_SECONDS)
@@ -161,6 +161,37 @@ BANK_STYLES = {
     "BMO": {"bg": "blue", "fg": "white"},
 }
 ADDRESS_STYLE = "background-color:#2b2b2b; color:white; font-weight:600;"
+
+
+def _color_to_rgb(color: str) -> tuple[int, int, int]:
+    c = str(color or "").strip().lower()
+    named = {
+        "white": (255, 255, 255),
+        "black": (0, 0, 0),
+        "red": (255, 0, 0),
+        "blue": (0, 0, 255),
+        "yellow": (255, 255, 0),
+        "green": (0, 128, 0),
+    }
+    if c in named:
+        return named[c]
+    if c.startswith("#"):
+        h = c[1:]
+        if len(h) == 3:
+            h = "".join(ch * 2 for ch in h)
+        if len(h) == 6:
+            try:
+                return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+            except ValueError:
+                pass
+    return (30, 136, 229)
+
+
+def _text_color_for_bg(bg_color: str) -> str:
+    r, g, b = _color_to_rgb(bg_color)
+    # Perceived brightness (WCAG-style weighting).
+    brightness = (0.299 * r) + (0.587 * g) + (0.114 * b)
+    return "black" if brightness >= 150 else "white"
 
 
 def cell_style(v, is_bank_col: bool = False, is_addr_col: bool = False) -> str:
@@ -634,8 +665,15 @@ def create_or_replace_masters_sheet(workbook_bytes: bytes, sheet_name: str = "Ma
 
 
 # ==========================================
-# LOAD FILE (auto-refresh every 3 hours)
+# LOAD FILE (long cache + manual refresh)
 # ==========================================
+if st.button("Refresh data", key="bank_periodics_refresh_data"):
+    download_banks_excel_cached.clear()
+    get_visible_sheet_names.clear()
+    detect_header_row.clear()
+    read_sheet_with_detected_header.clear()
+    st.rerun()
+
 try:
     with st.spinner("Syncing banks data..."):
         local_path = download_banks_excel_cached(BANKS_SP_PATH)
@@ -765,6 +803,7 @@ if st.session_state["bank_periodics_view"] == "Report":
             lat = float(row["Latitude"])
             lon = float(row["Longitude"])
             bank_color = BANK_STYLES.get(bank, {}).get("bg", "#1e88e5")
+            text_color = _text_color_for_bg(bank_color)
 
             # Circle-style marker with black border + centered count.
             folium.Marker(
@@ -779,7 +818,7 @@ if st.session_state["bank_periodics_view"] == "Report":
                         "border:2px solid black;"
                         f"background:{bank_color};"
                         "display:flex;align-items:center;justify-content:center;"
-                        "font-size:12px;font-weight:700;color:black;"
+                        f"font-size:12px;font-weight:700;color:{text_color};"
                         "line-height:1;"
                         "user-select:none;\">"
                         f"{cnt}"
