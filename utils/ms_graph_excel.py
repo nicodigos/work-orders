@@ -31,7 +31,7 @@ def _save_cache(cache: msal.SerializableTokenCache) -> None:
         st.session_state[MSAL_SESSION_CACHE_KEY] = cache.serialize()
 
 
-def _msal_app(cache: msal.SerializableTokenCache) -> msal.PublicClientApplication:
+def _msal_public_app(cache: msal.SerializableTokenCache) -> msal.PublicClientApplication:
     tenant_id = os.getenv("TENANT_ID")
     client_id = os.getenv("CLIENT_ID")
     if not tenant_id or not client_id:
@@ -45,12 +45,35 @@ def _msal_app(cache: msal.SerializableTokenCache) -> msal.PublicClientApplicatio
     )
 
 
+def _msal_confidential_app(cache: msal.SerializableTokenCache) -> msal.ConfidentialClientApplication:
+    tenant_id = os.getenv("TENANT_ID")
+    client_id = os.getenv("CLIENT_ID")
+    client_secret = os.getenv("CLIENT_SECRET")
+    if not tenant_id or not client_id or not client_secret:
+        raise RuntimeError("Missing TENANT_ID / CLIENT_ID / CLIENT_SECRET in environment.")
+
+    authority = f"https://login.microsoftonline.com/{tenant_id}"
+    return msal.ConfidentialClientApplication(
+        client_id,
+        authority=authority,
+        client_credential=client_secret,
+        token_cache=cache,
+    )
+
+
+def _msal_app_for_silent(cache: msal.SerializableTokenCache):
+    client_secret = os.getenv("CLIENT_SECRET")
+    if client_secret:
+        return _msal_confidential_app(cache)
+    return _msal_public_app(cache)
+
+
 # -------------------------
 # AUTH API
 # -------------------------
 def get_token_silent() -> str | None:
     cache = _load_cache()
-    app = _msal_app(cache)
+    app = _msal_app_for_silent(cache)
 
     accounts = app.get_accounts()
     if not accounts:
@@ -76,7 +99,7 @@ def require_graph_login() -> str:
 
 def get_token_silent_or_raise(not_authenticated_message: str, expired_message: str) -> str:
     cache = _load_cache()
-    app = _msal_app(cache)
+    app = _msal_app_for_silent(cache)
 
     accounts = app.get_accounts()
     if not accounts:
@@ -92,7 +115,7 @@ def get_token_silent_or_raise(not_authenticated_message: str, expired_message: s
 
 def start_device_flow() -> tuple[msal.PublicClientApplication, msal.SerializableTokenCache, dict]:
     cache = _load_cache()
-    app = _msal_app(cache)
+    app = _msal_public_app(cache)
     flow = app.initiate_device_flow(scopes=SCOPES)
     if "user_code" not in flow:
         raise RuntimeError(str(flow))
@@ -105,6 +128,39 @@ def finish_device_flow(
     flow: dict,
 ) -> str:
     result = app.acquire_token_by_device_flow(flow)
+    if "access_token" not in result:
+        raise RuntimeError(str(result))
+
+    _save_cache(cache)
+    return result["access_token"]
+
+
+def get_redirect_login_url(state: str) -> str:
+    cache = _load_cache()
+    app = _msal_confidential_app(cache)
+    redirect_uri = os.getenv("REDIRECT_URI")
+    if not redirect_uri:
+        raise RuntimeError("Missing REDIRECT_URI in environment.")
+    return app.get_authorization_request_url(
+        SCOPES,
+        redirect_uri=redirect_uri,
+        state=state,
+        prompt="select_account",
+    )
+
+
+def finish_redirect_flow(auth_code: str) -> str:
+    cache = _load_cache()
+    app = _msal_confidential_app(cache)
+    redirect_uri = os.getenv("REDIRECT_URI")
+    if not redirect_uri:
+        raise RuntimeError("Missing REDIRECT_URI in environment.")
+
+    result = app.acquire_token_by_authorization_code(
+        code=auth_code,
+        scopes=SCOPES,
+        redirect_uri=redirect_uri,
+    )
     if "access_token" not in result:
         raise RuntimeError(str(result))
 
