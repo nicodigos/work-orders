@@ -796,7 +796,7 @@ if st.session_state["bank_periodics_view"] == "Report":
                 ),
             ).add_to(cluster)
 
-        st_folium(folium_map, width=None, height=900)
+        st_folium(folium_map, width=None, height=700)
 
     st.subheader("Summary")
     done_pending_by_column_barchart(df, task_cols)
