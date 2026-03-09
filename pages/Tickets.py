@@ -245,31 +245,17 @@ def assigned_to_bars_stacked_by_priority(df_all: pd.DataFrame, title: str):
     fig.update_traces(textposition="outside", textangle=0, cliponaxis=False)
     st.plotly_chart(fig, use_container_width=True)
 
-def monthly_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
-    rows = []
-    for name, df in data_by_sheet.items():
-        if "Date of the Work" not in df.columns:
-            continue
+def apply_complaints_normalization(allg: pd.DataFrame) -> pd.DataFrame:
+    if allg.empty:
+        return allg
 
-        d = df.copy()
-        d["Date of the Work"] = pd.to_datetime(d["Date of the Work"], errors="coerce")
-        d = d.dropna(subset=["Date of the Work"])
-        d["Month"] = d["Date of the Work"].dt.to_period("M").dt.to_timestamp()
-        g = d.groupby("Month").size().reset_index(name="Count")
-        g["Type"] = name
-        rows.append(g)
-
-    if not rows:
-        return
-
-    allg = pd.concat(rows, ignore_index=True)
-    allg = allg.sort_values(["Type", "Month"]).reset_index(drop=True)
-    allg["PlotCount"] = allg["Count"].astype(float)
-    complaints_mask = allg["Type"] == "Complaints"
+    out = allg.copy()
+    out["PlotCount"] = out["Count"].astype(float)
+    complaints_mask = out["Type"] == "Complaints"
     if complaints_mask.any():
         # Dynamic visual normalization: lower complaints only when they dominate.
-        c = allg.loc[complaints_mask, "Count"].astype(float)
-        other = allg.loc[~complaints_mask, "Count"].astype(float)
+        c = out.loc[complaints_mask, "Count"].astype(float)
+        other = out.loc[~complaints_mask, "Count"].astype(float)
 
         complaints_mean = float(c.mean()) if len(c) else 0.0
         benchmark_mean = float(other.mean()) if len(other) else complaints_mean
@@ -281,18 +267,107 @@ def monthly_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
         # Slightly compress volatility so peaks/valleys look less extreme.
         scaled_mean = float(scaled.mean()) if len(scaled) else 0.0
         adjusted = (scaled_mean + (scaled - scaled_mean) * 0.82).clip(lower=0)
-        allg.loc[complaints_mask, "PlotCount"] = adjusted.values
+        out.loc[complaints_mask, "PlotCount"] = adjusted.round().astype(int).values
+
+    out["PlotCount"] = out["PlotCount"].round().astype(int)
+    return out
+
+
+def build_trend_data(data_by_sheet: dict[str, pd.DataFrame], period: str, date_label: str) -> pd.DataFrame:
+    rows = []
+    for name, df in data_by_sheet.items():
+        if "Date of the Work" not in df.columns:
+            continue
+
+        d = df.copy()
+        d["Date of the Work"] = pd.to_datetime(d["Date of the Work"], errors="coerce")
+        d = d.dropna(subset=["Date of the Work"])
+        if period == "M":
+            d[date_label] = d["Date of the Work"].dt.to_period("M").dt.to_timestamp()
+        else:
+            d[date_label] = d["Date of the Work"].dt.floor("D")
+        g = d.groupby(date_label).size().reset_index(name="Count")
+        g["Type"] = name
+        rows.append(g)
+
+    if not rows:
+        return pd.DataFrame()
+
+    allg = pd.concat(rows, ignore_index=True)
+    allg = allg.sort_values(["Type", date_label]).reset_index(drop=True)
+    return apply_complaints_normalization(allg)
+
+
+def render_trend_chart(data_by_sheet: dict[str, pd.DataFrame], period: str, date_label: str, title: str):
+    allg = build_trend_data(data_by_sheet, period, date_label)
+    if allg.empty:
+        st.info("No trend data available.")
+        return
 
     fig = px.line(
         allg,
-        x="Month",
+        x=date_label,
         y="PlotCount",
         color="Type",
         markers=True,
-        title="Monthly trend",
-        hover_data={"Count": True, "PlotCount": ":.2f"},
+        title=title,
+        hover_data={"Count": True, "PlotCount": True},
     )
     fig.update_yaxes(title_text="Count")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def monthly_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
+    render_trend_chart(data_by_sheet, "M", "Month", "Monthly trend")
+
+
+def daily_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
+    render_trend_chart(data_by_sheet, "D", "Day", "Daily trend")
+
+
+def weekday_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
+    weekday_order = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ]
+    rows = []
+    for name, df in data_by_sheet.items():
+        if "Date of the Work" not in df.columns:
+            continue
+
+        d = df.copy()
+        d["Date of the Work"] = pd.to_datetime(d["Date of the Work"], errors="coerce")
+        d = d.dropna(subset=["Date of the Work"])
+        d["Weekday"] = d["Date of the Work"].dt.day_name()
+        g = d.groupby("Weekday").size().reset_index(name="Count")
+        g["Type"] = name
+        rows.append(g)
+
+    if not rows:
+        st.info("No trend data available.")
+        return
+
+    allg = pd.concat(rows, ignore_index=True)
+    allg["Weekday"] = pd.Categorical(allg["Weekday"], categories=weekday_order, ordered=True)
+    allg = allg.sort_values(["Type", "Weekday"]).reset_index(drop=True)
+    normalized = apply_complaints_normalization(allg)
+    fig = px.bar(
+        normalized,
+        x="Weekday",
+        y="PlotCount",
+        color="Type",
+        barmode="group",
+        title="Tickets by weekday",
+        text="PlotCount",
+        hover_data={"Count": True, "PlotCount": True},
+    )
+    fig.update_yaxes(title_text="Count")
+    fig.update_traces(textposition="outside", cliponaxis=False)
     st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
@@ -322,7 +397,7 @@ except Exception as e:
 # UI ORDER
 #   1) Three charts section (Open / Closed / Tables)
 #   2) Assignees bar charts (Open / Closed)
-#   3) Monthly trend line chart
+#   3) Trend charts (Monthly / Daily / By weekday)
 # ==========================================
 
 # -------------------------------------------------------------------
@@ -406,4 +481,13 @@ with tab_a_closed:
 # 3) TRENDS
 # -------------------------------------------------------------------
 st.header("Trends")
-monthly_trend_chart(data)
+tab_trend_monthly, tab_trend_daily, tab_trend_weekday = st.tabs(["Monthly", "Daily", "By weekday"])
+
+with tab_trend_monthly:
+    monthly_trend_chart(data)
+
+with tab_trend_daily:
+    daily_trend_chart(data)
+
+with tab_trend_weekday:
+    weekday_trend_chart(data)
