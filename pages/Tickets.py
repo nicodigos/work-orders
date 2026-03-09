@@ -303,15 +303,16 @@ def render_trend_chart(data_by_sheet: dict[str, pd.DataFrame], period: str, date
     if allg.empty:
         st.info("No trend data available.")
         return
+    plot_data = allg.rename(columns={"Count": "RawCount", "PlotCount": "Count"})
 
     fig = px.line(
-        allg,
+        plot_data,
         x=date_label,
-        y="PlotCount",
+        y="Count",
         color="Type",
         markers=True,
         title=title,
-        hover_data={"Count": True, "PlotCount": True},
+        hover_data={"RawCount": False, "Count": True},
     )
     fig.update_yaxes(title_text="Count")
     st.plotly_chart(fig, use_container_width=True)
@@ -356,15 +357,16 @@ def weekday_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
     allg["Weekday"] = pd.Categorical(allg["Weekday"], categories=weekday_order, ordered=True)
     allg = allg.sort_values(["Type", "Weekday"]).reset_index(drop=True)
     normalized = apply_complaints_normalization(allg)
+    plot_data = normalized.rename(columns={"Count": "RawCount", "PlotCount": "Count"})
     fig = px.bar(
-        normalized,
+        plot_data,
         x="Weekday",
-        y="PlotCount",
+        y="Count",
         color="Type",
         barmode="group",
         title="Tickets by weekday",
-        text="PlotCount",
-        hover_data={"Count": True, "PlotCount": True},
+        text="Count",
+        hover_data={"RawCount": False, "Count": True},
     )
     fig.update_yaxes(title_text="Count")
     fig.update_traces(textposition="outside", cliponaxis=False)
