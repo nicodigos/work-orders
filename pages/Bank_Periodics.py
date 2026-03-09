@@ -670,8 +670,8 @@ def save_status_change_to_sharepoint(
     read_sheet_with_detected_header.clear()
 
 
-@st.dialog("Confirm Done")
-def confirm_mark_done_dialog(
+@st.dialog("Confirm Status Change")
+def confirm_status_change_dialog(
     *,
     sheet_name: str,
     bank_col: str,
@@ -679,10 +679,11 @@ def confirm_mark_done_dialog(
     service_col: str,
     bank_value: str,
     address_value: str,
+    new_status: str,
     success_message: str,
     key_prefix: str,
 ) -> None:
-    st.write("Are you sure you want to mark this record as Done?")
+    st.write(f"Are you sure you want to change this record to {new_status}?")
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Cancel", key=f"{key_prefix}_cancel"):
@@ -697,7 +698,7 @@ def confirm_mark_done_dialog(
                     service_col=service_col,
                     bank_value=bank_value,
                     address_value=address_value,
-                    new_status="Done",
+                    new_status=new_status,
                 )
                 st.success(success_message)
                 st.rerun()
@@ -1054,16 +1055,22 @@ elif st.session_state["bank_periodics_view"] == "Report Matrix":
     current_status_matrix = selected_row[selected_service_matrix]
 
     st.caption(f"Current status: {current_status_matrix if not _is_blank(current_status_matrix) else '(empty)'}")
-    if st.button("Done", type="primary", key="matrix_done_btn"):
-        confirm_mark_done_dialog(
+    new_status_matrix = st.selectbox(
+        "New status",
+        options=["Done", "Not Scheduled", "Pending"],
+        key="matrix_new_status",
+    )
+    if st.button("Update", type="primary", key="matrix_update_btn"):
+        confirm_status_change_dialog(
             sheet_name=sheet_matrix,
             bank_col=bank_col_matrix,
             addr_col=addr_col_matrix,
             service_col=selected_service_matrix,
             bank_value=selected_bank_matrix,
             address_value=selected_address_matrix,
+            new_status=new_status_matrix,
             success_message="Record updated in SharePoint Excel.",
-            key_prefix="matrix_done_dialog",
+            key_prefix="matrix_status_dialog",
         )
 
 else:
@@ -1114,13 +1121,14 @@ else:
 
                 st.caption("Current status: Pending")
                 if st.button("Done", type="primary", key="edit_done_btn"):
-                    confirm_mark_done_dialog(
+                    confirm_status_change_dialog(
                         sheet_name=sheet_edit,
                         bank_col=bank_col_edit,
                         addr_col=addr_col_edit,
                         service_col=service_col,
                         bank_value=selected_bank,
                         address_value=selected_address,
+                        new_status="Done",
                         success_message="Status updated in SharePoint Excel.",
                         key_prefix="edit_done_dialog",
                     )
