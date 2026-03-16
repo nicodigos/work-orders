@@ -394,11 +394,13 @@ def assigned_to_bars_stacked_by_priority(df_all: pd.DataFrame, title: str, chart
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
 def apply_complaints_normalization(allg: pd.DataFrame) -> pd.DataFrame:
-    if allg.empty:
-        return allg
-
     out = allg.copy()
+    if "Count" not in out.columns:
+        out["Count"] = pd.Series(dtype=float)
     out["PlotCount"] = out["Count"].astype(float)
+    if out.empty:
+        return out
+
     complaints_mask = out["Type"] == "Complaints"
     if complaints_mask.any():
         # Dynamic visual normalization: lower complaints only when they dominate.
