@@ -457,7 +457,9 @@ def render_trend_chart(
     if allg.empty:
         st.info("No trend data available.")
         return
-    plot_data = allg.rename(columns={"Count": "RawCount", "PlotCount": "Count"})
+    plot_data = allg.copy()
+    plot_data["RawCount"] = plot_data["Count"]
+    plot_data["Count"] = plot_data["PlotCount"]
 
     fig = px.line(
         plot_data,
@@ -511,7 +513,9 @@ def weekday_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
     allg["Weekday"] = pd.Categorical(allg["Weekday"], categories=weekday_order, ordered=True)
     allg = allg.sort_values(["Type", "Weekday"]).reset_index(drop=True)
     normalized = apply_complaints_normalization(allg)
-    plot_data = normalized.rename(columns={"Count": "RawCount", "PlotCount": "Count"})
+    plot_data = normalized.copy()
+    plot_data["RawCount"] = plot_data["Count"]
+    plot_data["Count"] = plot_data["PlotCount"]
     fig = px.bar(
         plot_data,
         x="Weekday",
