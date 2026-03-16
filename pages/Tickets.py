@@ -319,7 +319,7 @@ def style_by_priority(df: pd.DataFrame):
 # ==========================================
 # CHARTS
 # ==========================================
-def open_stacked_chart(df: pd.DataFrame, status_col: str, title: str):
+def open_stacked_chart(df: pd.DataFrame, status_col: str, title: str, chart_key: str):
     if df.empty:
         thumb_card("0 pending tickets")
         return
@@ -346,9 +346,9 @@ def open_stacked_chart(df: pd.DataFrame, status_col: str, title: str):
     )
     fig.update_layout(barmode="stack", showlegend=False)
     fig.update_traces(textposition="inside")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
-def closed_pie_chart(df: pd.DataFrame, title: str):
+def closed_pie_chart(df: pd.DataFrame, title: str, chart_key: str):
     if df.empty:
         thumb_card("0 closed tickets")
         return
@@ -363,9 +363,9 @@ def closed_pie_chart(df: pd.DataFrame, title: str):
         color_discrete_map=PRIORITY_COLORS,
         hole=0.35,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
-def assigned_to_bars_stacked_by_priority(df_all: pd.DataFrame, title: str):
+def assigned_to_bars_stacked_by_priority(df_all: pd.DataFrame, title: str, chart_key: str):
     if df_all.empty:
         thumb_card("0 tickets", 260)
         return
@@ -391,7 +391,7 @@ def assigned_to_bars_stacked_by_priority(df_all: pd.DataFrame, title: str):
         margin=dict(l=140, r=40, t=60, b=40),
     )
     fig.update_traces(textposition="outside", textangle=0, cliponaxis=False)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
 def apply_complaints_normalization(allg: pd.DataFrame) -> pd.DataFrame:
     if allg.empty:
@@ -446,7 +446,13 @@ def build_trend_data(data_by_sheet: dict[str, pd.DataFrame], period: str, date_l
     return apply_complaints_normalization(allg)
 
 
-def render_trend_chart(data_by_sheet: dict[str, pd.DataFrame], period: str, date_label: str, title: str):
+def render_trend_chart(
+    data_by_sheet: dict[str, pd.DataFrame],
+    period: str,
+    date_label: str,
+    title: str,
+    chart_key: str,
+):
     allg = build_trend_data(data_by_sheet, period, date_label)
     if allg.empty:
         st.info("No trend data available.")
@@ -463,15 +469,15 @@ def render_trend_chart(data_by_sheet: dict[str, pd.DataFrame], period: str, date
         hover_data={"RawCount": False, "Count": True},
     )
     fig.update_yaxes(title_text="Count")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
 
 def monthly_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
-    render_trend_chart(data_by_sheet, "M", "Month", "Monthly trend")
+    render_trend_chart(data_by_sheet, "M", "Month", "Monthly trend", "trend-monthly")
 
 
 def daily_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
-    render_trend_chart(data_by_sheet, "D", "Day", "Daily trend")
+    render_trend_chart(data_by_sheet, "D", "Day", "Daily trend", "trend-daily")
 
 
 def weekday_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
@@ -518,7 +524,7 @@ def weekday_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
     )
     fig.update_yaxes(title_text="Count")
     fig.update_traces(textposition="outside", cliponaxis=False)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="trend-weekday")
 
 # ==========================================
 # LOAD DATA (auto-refresh every 30 minutes)
@@ -573,7 +579,7 @@ with tab_3_open:
             st.subheader(name)
             status_col = SHEETS[name]["status_col"]
             df_nc = filter_not_closed(filtered_data[name], status_col)
-            open_stacked_chart(df_nc, status_col, "By priority")
+            open_stacked_chart(df_nc, status_col, "By priority", f"open-priority-{name}")
 
 with tab_3_closed:
     c1, c2, c3 = st.columns(3)
@@ -582,7 +588,7 @@ with tab_3_closed:
             st.subheader(name)
             status_col = SHEETS[name]["status_col"]
             df_c = filter_closed(filtered_data[name], status_col)
-            closed_pie_chart(df_c, "By priority")
+            closed_pie_chart(df_c, "By priority", f"closed-priority-{name}")
 
 with tab_3_tables:
     for name in SHEETS:
@@ -610,7 +616,7 @@ with tab_a_open:
             open_combined.append(df_nc[["Assigned To", "Priority"]])
 
     df_open_all = pd.concat(open_combined, ignore_index=True) if open_combined else pd.DataFrame()
-    assigned_to_bars_stacked_by_priority(df_open_all, "Assignees")
+    assigned_to_bars_stacked_by_priority(df_open_all, "Assignees", "assignees-open")
 
 with tab_a_closed:
     closed_combined = []
@@ -621,7 +627,7 @@ with tab_a_closed:
             closed_combined.append(df_c[["Assigned To", "Priority"]])
 
     df_closed_all = pd.concat(closed_combined, ignore_index=True) if closed_combined else pd.DataFrame()
-    assigned_to_bars_stacked_by_priority(df_closed_all, "Assignees")
+    assigned_to_bars_stacked_by_priority(df_closed_all, "Assignees", "assignees-closed")
 
 # -------------------------------------------------------------------
 # 3) TRENDS
