@@ -40,6 +40,15 @@ SHEETS = {
 
 PRIORITY_COLORS = {"High": "#d32f2f", "Medium": "#fbc02d", "Low": "#388e3c"}
 PRIORITY_COLORS_LIGHT = {"High": "#f28b82", "Medium": "#ffe082", "Low": "#a5d6a7"}
+FILTER_COLUMNS = [
+    "Ticket Number",
+    "Date of the Work",
+    "Building Location",
+    "Assigned To",
+    "Status",
+    "Priority",
+    "Type of complaint",
+]
 
 @st.cache_data(show_spinner=False, ttl=TICKETS_REFRESH_SECONDS)
 def download_tickets_excel_cached(sp_relative_path: str) -> str:
@@ -120,6 +129,10 @@ def normalize_status(s: pd.Series) -> pd.Series:
 def normalize_assigned_to(s: pd.Series) -> pd.Series:
     return _clean_text(s)
 
+
+def normalize_generic_text(s: pd.Series) -> pd.Series:
+    return _clean_text(s)
+
 # ==========================================
 # FILTERS
 # ==========================================
@@ -151,6 +164,141 @@ def filter_not_closed(df: pd.DataFrame, status_col: str) -> pd.DataFrame:
 def filter_closed(df: pd.DataFrame, status_col: str) -> pd.DataFrame:
     d = _prep_common(df, status_col)
     return d[d[status_col] == "Closed"]
+
+
+def prepare_filter_frame(df: pd.DataFrame, status_col: str) -> pd.DataFrame:
+    d = df.copy()
+
+    if "Ticket Number" in d.columns:
+        d["Ticket Number"] = normalize_generic_text(d["Ticket Number"])
+    else:
+        d["Ticket Number"] = None
+
+    if "Date of the Work" in d.columns:
+        d["Date of the Work"] = pd.to_datetime(d["Date of the Work"], errors="coerce")
+    else:
+        d["Date of the Work"] = pd.NaT
+
+    if "Building Location" in d.columns:
+        d["Building Location"] = normalize_generic_text(d["Building Location"])
+    else:
+        d["Building Location"] = None
+
+    if "Assigned To" in d.columns:
+        d["Assigned To"] = normalize_assigned_to(d["Assigned To"])
+    else:
+        d["Assigned To"] = None
+
+    if status_col in d.columns:
+        d["Status"] = normalize_status(d[status_col])
+        d[status_col] = d["Status"]
+    else:
+        d["Status"] = None
+
+    if "Priority" in d.columns:
+        d["Priority"] = normalize_priority(d["Priority"])
+    else:
+        d["Priority"] = None
+
+    if "Type of complaint" in d.columns:
+        d["Type of complaint"] = normalize_generic_text(d["Type of complaint"])
+    else:
+        d["Type of complaint"] = None
+
+    return d
+
+
+def build_sidebar_filters(prepared_data: dict[str, pd.DataFrame]) -> dict[str, object]:
+    combined = pd.concat(prepared_data.values(), ignore_index=True) if prepared_data else pd.DataFrame()
+
+    def options_for(column: str) -> list[str]:
+        if column not in combined.columns or combined.empty:
+            return []
+        values = combined[column].dropna().astype(str).sort_values().unique().tolist()
+        return values
+
+    sidebar = st.sidebar
+    sidebar.header("Tickets Filters")
+
+    ticket_numbers = sidebar.multiselect(
+        "Ticket Number",
+        options=options_for("Ticket Number"),
+    )
+
+    min_date = None
+    max_date = None
+    if "Date of the Work" in combined.columns and not combined.empty:
+        dates = combined["Date of the Work"].dropna()
+        if not dates.empty:
+            min_date = dates.min().date()
+            max_date = dates.max().date()
+
+    date_range = None
+    if min_date and max_date:
+        date_range = sidebar.date_input(
+            "Date of the Work",
+            value=(min_date, max_date),
+            min_value=min_date,
+            max_value=max_date,
+        )
+    else:
+        sidebar.caption("Date of the Work: no values available")
+
+    building_locations = sidebar.multiselect(
+        "Building Location",
+        options=options_for("Building Location"),
+    )
+    assigned_to = sidebar.multiselect(
+        "Assigned To",
+        options=options_for("Assigned To"),
+    )
+    statuses = sidebar.multiselect(
+        "Status",
+        options=options_for("Status"),
+    )
+    priorities = sidebar.multiselect(
+        "Priority",
+        options=options_for("Priority"),
+    )
+    complaint_types = sidebar.multiselect(
+        "Type of complaint",
+        options=options_for("Type of complaint"),
+    )
+
+    start_date = end_date = None
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start_date, end_date = date_range
+    elif date_range:
+        start_date = end_date = date_range
+
+    return {
+        "Ticket Number": set(ticket_numbers),
+        "Date of the Work": (pd.Timestamp(start_date), pd.Timestamp(end_date)) if start_date and end_date else None,
+        "Building Location": set(building_locations),
+        "Assigned To": set(assigned_to),
+        "Status": set(statuses),
+        "Priority": set(priorities),
+        "Type of complaint": set(complaint_types),
+    }
+
+
+def apply_sidebar_filters(df: pd.DataFrame, filters: dict[str, object]) -> pd.DataFrame:
+    d = df.copy()
+
+    for column in FILTER_COLUMNS:
+        selected = filters.get(column)
+        if column == "Date of the Work":
+            if selected:
+                start_date, end_date = selected
+                if "Date of the Work" in d.columns:
+                    mask = d["Date of the Work"].notna() & d["Date of the Work"].between(start_date, end_date)
+                    d = d[mask]
+            continue
+
+        if selected and column in d.columns:
+            d = d[d[column].isin(selected)]
+
+    return d
 
 # ==========================================
 # TABLE STYLING (ROW COLOR BY PRIORITY)
@@ -395,6 +543,16 @@ except Exception as e:
     st.error(f"Could not read Excel sheets: {e}")
     st.stop()
 
+prepared_data = {
+    name: prepare_filter_frame(df, SHEETS[name]["status_col"])
+    for name, df in data.items()
+}
+sidebar_filters = build_sidebar_filters(prepared_data)
+filtered_data = {
+    name: apply_sidebar_filters(df, sidebar_filters)
+    for name, df in prepared_data.items()
+}
+
 # ==========================================
 # UI ORDER
 #   1) Three charts section (Open / Closed / Tables)
@@ -414,7 +572,7 @@ with tab_3_open:
         with col:
             st.subheader(name)
             status_col = SHEETS[name]["status_col"]
-            df_nc = filter_not_closed(data[name], status_col)
+            df_nc = filter_not_closed(filtered_data[name], status_col)
             open_stacked_chart(df_nc, status_col, "By priority")
 
 with tab_3_closed:
@@ -423,14 +581,14 @@ with tab_3_closed:
         with col:
             st.subheader(name)
             status_col = SHEETS[name]["status_col"]
-            df_c = filter_closed(data[name], status_col)
+            df_c = filter_closed(filtered_data[name], status_col)
             closed_pie_chart(df_c, "By priority")
 
 with tab_3_tables:
     for name in SHEETS:
         st.subheader(f"{name} (Not Closed)")
         status_col = SHEETS[name]["status_col"]
-        df_nc = filter_not_closed(data[name], status_col)
+        df_nc = filter_not_closed(filtered_data[name], status_col)
 
         if df_nc.empty:
             st.info("No open tickets.")
@@ -444,17 +602,10 @@ st.header("Assignees")
 tab_a_open, tab_a_closed = st.tabs(["Open", "Closed"])
 
 with tab_a_open:
-    sources_open = st.multiselect(
-        "Sources: include",
-        options=list(SHEETS.keys()),
-        default=list(SHEETS.keys()),
-        key="assignees_open_sources",
-    )
-
     open_combined = []
-    for name in sources_open:
+    for name in SHEETS:
         status_col = SHEETS[name]["status_col"]
-        df_nc = filter_not_closed(data[name], status_col)
+        df_nc = filter_not_closed(filtered_data[name], status_col)
         if not df_nc.empty and "Assigned To" in df_nc.columns:
             open_combined.append(df_nc[["Assigned To", "Priority"]])
 
@@ -462,17 +613,10 @@ with tab_a_open:
     assigned_to_bars_stacked_by_priority(df_open_all, "Assignees")
 
 with tab_a_closed:
-    sources_closed = st.multiselect(
-        "Sources: include",
-        options=list(SHEETS.keys()),
-        default=list(SHEETS.keys()),
-        key="assignees_closed_sources",
-    )
-
     closed_combined = []
-    for name in sources_closed:
+    for name in SHEETS:
         status_col = SHEETS[name]["status_col"]
-        df_c = filter_closed(data[name], status_col)
+        df_c = filter_closed(filtered_data[name], status_col)
         if not df_c.empty and "Assigned To" in df_c.columns:
             closed_combined.append(df_c[["Assigned To", "Priority"]])
 
@@ -486,10 +630,10 @@ st.header("Trends")
 tab_trend_monthly, tab_trend_daily, tab_trend_weekday = st.tabs(["Monthly", "Daily", "By weekday"])
 
 with tab_trend_monthly:
-    monthly_trend_chart(data)
+    monthly_trend_chart(filtered_data)
 
 with tab_trend_daily:
-    daily_trend_chart(data)
+    daily_trend_chart(filtered_data)
 
 with tab_trend_weekday:
-    weekday_trend_chart(data)
+    weekday_trend_chart(filtered_data)
