@@ -7,7 +7,7 @@ import plotly.express as px
 import streamlit as st
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
-from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.pagesizes import LETTER, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.lib.utils import ImageReader
@@ -100,7 +100,7 @@ APPENDIX_COLUMN_WEIGHTS = {
 
 PRIORITY_COLORS = {"High": "#d32f2f", "Medium": "#fbc02d", "Low": "#388e3c"}
 PRIORITY_COLORS_LIGHT = {"High": "#f28b82", "Medium": "#ffe082", "Low": "#a5d6a7"}
-TYPE_COLORS = {"Complaints": "#c62828", "Work Orders": "#2e7d32", "Request": "#1565c0"}
+TYPE_COLORS = {"Complaints": "#c62828", "Work Orders": "#66bb6a", "Request": "#1565c0"}
 STATUS_CELL_COLORS = {
     "Open": (colors.white, colors.HexColor("#111827")),
     "In Progress": (colors.HexColor("#f1f5f9"), colors.HexColor("#111827")),
@@ -891,7 +891,7 @@ def build_tickets_report_pdf(filtered_data: dict[str, pd.DataFrame], filters: di
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer,
-        pagesize=landscape(A4),
+        pagesize=landscape(LETTER),
         leftMargin=0.4 * inch,
         rightMargin=0.4 * inch,
         topMargin=0.45 * inch,
