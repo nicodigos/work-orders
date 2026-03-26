@@ -1,9 +1,26 @@
 import os
+from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
+from reportlab.platypus import (
+    HRFlowable,
+    Image,
+    LongTable,
+    PageBreak,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    TableStyle,
+)
 from utils.ms_graph_excel import (
     download_sharepoint_file_bytes,
     get_token_silent_or_raise,
@@ -26,6 +43,7 @@ TICKETS_SP_PATH = os.getenv(
     "SP_FILE_PATH",
     "General/12433087 CANADA INC-MASTER/21-Work Orders-Complaints-Request/WorkOrders-Complaints-Master-2025-v1.xlsm"
 )
+REPORT_LOGO_PATH = Path(__file__).resolve().parents[1] / "assets" / "logo.jpeg"
 
 TICKETS_REFRESH_SECONDS = 30 * 60  # 30 minutes
 
@@ -37,9 +55,63 @@ SHEETS = {
     "Request": {"sheet": "Request", "status_col": "Status"},
     "Complaints": {"sheet": "Complaints", "status_col": "Status"},
 }
+APPENDIX_COLUMNS = {
+    "Work Orders": [
+        "Ticket Number",
+        "Date of the Work",
+        "Building Location",
+        "Client",
+        "Email subject",
+        "Assigned To",
+        "General Status",
+        "Priority",
+    ],
+    "Request": [
+        "Ticket Number",
+        "Date of the Work",
+        "Building Location",
+        "Description/Details",
+        "Assigned To",
+        "Status",
+        "Priority",
+    ],
+    "Complaints": [
+        "Ticket Number",
+        "Date of the Work",
+        "Building Location",
+        "Description/Details",
+        "Assigned To",
+        "Status",
+        "Priority",
+    ],
+}
+APPENDIX_COLUMN_WEIGHTS = {
+    "Ticket Number": 1.2,
+    "Date of the Work": 1.2,
+    "Building Location": 1.6,
+    "Description/Details": 3.4,
+    "Assigned To": 1.4,
+    "Status": 1.2,
+    "Priority": 1.0,
+    "Client": 1.5,
+    "Email subject": 3.0,
+    "General Status": 1.4,
+}
 
 PRIORITY_COLORS = {"High": "#d32f2f", "Medium": "#fbc02d", "Low": "#388e3c"}
 PRIORITY_COLORS_LIGHT = {"High": "#f28b82", "Medium": "#ffe082", "Low": "#a5d6a7"}
+TYPE_COLORS = {"Complaints": "#c62828", "Work Orders": "#2e7d32", "Request": "#1565c0"}
+STATUS_CELL_COLORS = {
+    "Open": (colors.white, colors.HexColor("#111827")),
+    "In Progress": (colors.HexColor("#f1f5f9"), colors.HexColor("#111827")),
+    "Closed": (colors.HexColor("#e5e7eb"), colors.HexColor("#111827")),
+    "Other": (colors.HexColor("#f8fafc"), colors.HexColor("#111827")),
+}
+PRIORITY_CELL_COLORS = {
+    "High": (colors.HexColor("#f4b6b2"), colors.HexColor("#7f1d1d")),
+    "Medium": (colors.HexColor("#fde68a"), colors.HexColor("#78350f")),
+    "Low": (colors.HexColor("#bbf7d0"), colors.HexColor("#14532d")),
+}
 FILTER_COLUMNS = [
     "Ticket Number",
     "Date of the Work",
@@ -316,13 +388,242 @@ def style_by_priority(df: pd.DataFrame):
 
     return df.style.apply(row_style, axis=1)
 
+
+def _safe_text(value) -> str:
+    if pd.isna(value):
+        return ""
+    if isinstance(value, pd.Timestamp):
+        return value.strftime("%Y-%m-%d")
+    return str(value)
+
+
+def _status_sort_key(value) -> int:
+    order = {"Open": 0, "In Progress": 1, "Other": 2, "Closed": 3}
+    return order.get(_safe_text(value), 4)
+
+
+def _status_column_name(df: pd.DataFrame) -> str | None:
+    if "Status" in df.columns:
+        return "Status"
+    if "General Status" in df.columns:
+        return "General Status"
+    return None
+
+
+def sort_for_appendix(df: pd.DataFrame) -> pd.DataFrame:
+    status_column = _status_column_name(df)
+    if df.empty or status_column is None:
+        return df
+
+    d = df.copy()
+    d["__status_order"] = d[status_column].map(_status_sort_key)
+    sort_columns = ["__status_order"]
+    ascending = [True]
+    if "Date of the Work" in d.columns:
+        d["__sort_date"] = pd.to_datetime(d["Date of the Work"], errors="coerce")
+        sort_columns.append("__sort_date")
+        ascending.append(True)
+    d = d.sort_values(sort_columns, ascending=ascending, kind="stable").drop(columns=[c for c in ["__status_order", "__sort_date"] if c in d.columns])
+    return d
+
+
+def filters_signature(filters: dict[str, object]) -> tuple:
+    signature = []
+    for column in FILTER_COLUMNS:
+        selected = filters.get(column)
+        if column == "Date of the Work":
+            if selected:
+                start_date, end_date = selected
+                signature.append((column, _safe_text(start_date), _safe_text(end_date)))
+            else:
+                signature.append((column, None))
+        else:
+            signature.append((column, tuple(sorted(selected)) if selected else tuple()))
+    return tuple(signature)
+
+
+def render_filters_summary(filters: dict[str, object]) -> list[str]:
+    lines = []
+    for column in FILTER_COLUMNS:
+        selected = filters.get(column)
+        if column == "Date of the Work":
+            if selected:
+                start_date, end_date = selected
+                lines.append(f"{column}: {_safe_text(start_date)} to {_safe_text(end_date)}")
+            else:
+                lines.append(f"{column}: All")
+            continue
+
+        if selected:
+            lines.append(f"{column}: {', '.join(sorted(selected))}")
+        else:
+            lines.append(f"{column}: All")
+    return lines
+
+
+def render_active_filters_summary(filters: dict[str, object]) -> list[str]:
+    lines = []
+    for column in FILTER_COLUMNS:
+        selected = filters.get(column)
+        if column == "Date of the Work":
+            if selected:
+                start_date, end_date = selected
+                lines.append(f"<b>{column}</b>: {_safe_text(start_date)} to {_safe_text(end_date)}")
+            continue
+
+        if selected:
+            lines.append(f"<b>{column}</b>: {', '.join(sorted(selected))}")
+    return lines
+
+
+def _column_has_content(series: pd.Series) -> bool:
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return series.notna().any()
+    return series.map(_safe_text).str.strip().ne("").any()
+
+
+def _prepare_appendix_columns(section_name: str, df: pd.DataFrame) -> pd.DataFrame:
+    preferred_columns = APPENDIX_COLUMNS.get(section_name, [])
+    selected_columns = [column for column in preferred_columns if column in df.columns and _column_has_content(df[column])]
+
+    if not selected_columns:
+        selected_columns = [column for column in df.columns if _column_has_content(df[column])]
+
+    table_df = sort_for_appendix(df[selected_columns].copy())
+    for column in table_df.columns:
+        if pd.api.types.is_datetime64_any_dtype(table_df[column]):
+            table_df[column] = table_df[column].dt.strftime("%Y-%m-%d").fillna("")
+        else:
+            table_df[column] = table_df[column].map(_safe_text)
+    return table_df
+
+
+def _build_column_widths(columns: list[str], total_width: float) -> list[float]:
+    weights = [APPENDIX_COLUMN_WEIGHTS.get(column, 1.2) for column in columns]
+    weight_sum = sum(weights) or 1.0
+    return [(weight / weight_sum) * total_width for weight in weights]
+
+
+def build_report_table(section_name: str, df: pd.DataFrame) -> LongTable:
+    styles = get_pdf_styles()
+    table_df = _prepare_appendix_columns(section_name, df)
+    if table_df.empty and len(table_df.columns) == 0:
+        fallback = LongTable(
+            [[Paragraph("No relevant columns with data for this section.", styles["table_cell"])]],
+            colWidths=[10.6 * inch],
+        )
+        fallback.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#cbd5e1"))]))
+        return fallback
+
+    header_row = [Paragraph(column, styles["table_header"]) for column in table_df.columns]
+    data_rows = [
+        [Paragraph(value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), styles["table_cell"]) for value in row]
+        for row in table_df.values.tolist()
+    ]
+    rows = [header_row] + data_rows
+    total_width = 10.6 * inch
+    col_widths = _build_column_widths(table_df.columns.tolist(), total_width)
+    table = LongTable(rows, repeatRows=1, colWidths=col_widths, splitByRow=1)
+    style_commands = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#cbd5e1")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]
+
+    status_column = _status_column_name(table_df)
+    priority_idx = table_df.columns.get_loc("Priority") if "Priority" in table_df.columns else None
+    if status_column:
+        status_idx = table_df.columns.get_loc(status_column)
+        for row_idx, status_value in enumerate(table_df[status_column].tolist(), start=1):
+            bg, fg = STATUS_CELL_COLORS.get(_safe_text(status_value), STATUS_CELL_COLORS["Other"])
+            if priority_idx is None:
+                style_commands.append(("BACKGROUND", (0, row_idx), (-1, row_idx), bg))
+                style_commands.append(("TEXTCOLOR", (0, row_idx), (-1, row_idx), fg))
+            else:
+                if priority_idx > 0:
+                    style_commands.append(("BACKGROUND", (0, row_idx), (priority_idx - 1, row_idx), bg))
+                    style_commands.append(("TEXTCOLOR", (0, row_idx), (priority_idx - 1, row_idx), fg))
+                if priority_idx < len(table_df.columns) - 1:
+                    style_commands.append(("BACKGROUND", (priority_idx + 1, row_idx), (-1, row_idx), bg))
+                    style_commands.append(("TEXTCOLOR", (priority_idx + 1, row_idx), (-1, row_idx), fg))
+                style_commands.append(("BACKGROUND", (status_idx, row_idx), (status_idx, row_idx), bg))
+                style_commands.append(("TEXTCOLOR", (status_idx, row_idx), (status_idx, row_idx), fg))
+
+    if priority_idx is not None:
+        for row_idx, priority_value in enumerate(table_df["Priority"].tolist(), start=1):
+            color_pair = PRIORITY_CELL_COLORS.get(_safe_text(priority_value))
+            if color_pair:
+                bg, fg = color_pair
+                style_commands.append(("BACKGROUND", (priority_idx, row_idx), (priority_idx, row_idx), bg))
+                style_commands.append(("TEXTCOLOR", (priority_idx, row_idx), (priority_idx, row_idx), fg))
+
+    table.setStyle(TableStyle(style_commands))
+    return table
+
+
+def get_pdf_styles():
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="ReportTitle", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=20, leading=24, spaceAfter=8, alignment=TA_CENTER, textColor=colors.HexColor("#0f172a")))
+    styles.add(ParagraphStyle(name="ReportSection", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=13, leading=16, spaceBefore=8, spaceAfter=8, alignment=TA_CENTER, textColor=colors.HexColor("#0f172a")))
+    styles.add(ParagraphStyle(name="ReportBody", parent=styles["BodyText"], fontName="Helvetica", fontSize=9, leading=12, spaceAfter=4, alignment=TA_CENTER, textColor=colors.HexColor("#475569")))
+    styles.add(ParagraphStyle(name="ReportFilters", parent=styles["BodyText"], fontName="Helvetica", fontSize=8.5, leading=11, spaceAfter=3, alignment=TA_CENTER, textColor=colors.HexColor("#334155")))
+    styles.add(ParagraphStyle(name="ReportTableHeader", parent=styles["BodyText"], fontName="Helvetica-Bold", fontSize=7, leading=8, textColor=colors.white))
+    styles.add(ParagraphStyle(name="ReportTableCell", parent=styles["BodyText"], fontName="Helvetica", fontSize=6.5, leading=8))
+    return {
+        "title": styles["ReportTitle"],
+        "section": styles["ReportSection"],
+        "body": styles["ReportBody"],
+        "filters": styles["ReportFilters"],
+        "table_header": styles["ReportTableHeader"],
+        "table_cell": styles["ReportTableCell"],
+    }
+
+
+def build_report_header(story: list, styles: dict[str, ParagraphStyle], title: str, filters: dict[str, object]):
+    if REPORT_LOGO_PATH.exists():
+        image_reader = ImageReader(str(REPORT_LOGO_PATH))
+        img_width, img_height = image_reader.getSize()
+        target_width = 1.5 * inch
+        scale = target_width / float(img_width)
+        logo = Image(str(REPORT_LOGO_PATH))
+        logo.drawWidth = target_width
+        logo.drawHeight = float(img_height) * scale
+        logo.hAlign = "CENTER"
+        story.append(logo)
+        story.append(Spacer(1, 0.1 * inch))
+
+    story.append(Paragraph(title, styles["title"]))
+    active_filters = render_active_filters_summary(filters)
+    if active_filters:
+        story.append(Paragraph("Active filters", styles["body"]))
+        for line in active_filters:
+            story.append(Paragraph(line, styles["filters"]))
+        story.append(Spacer(1, 0.05 * inch))
+
+
+def build_section_divider() -> HRFlowable:
+    return HRFlowable(
+        width="72%",
+        thickness=0.9,
+        color=colors.HexColor("#cbd5e1"),
+        hAlign="CENTER",
+        spaceBefore=0.08 * inch,
+        spaceAfter=0.14 * inch,
+    )
+
 # ==========================================
 # CHARTS
 # ==========================================
-def open_stacked_chart(df: pd.DataFrame, status_col: str, title: str, chart_key: str):
+def build_open_stacked_figure(df: pd.DataFrame, status_col: str, title: str):
     if df.empty:
-        thumb_card("0 pending tickets")
-        return
+        return None
 
     g = df.groupby(["Priority", status_col]).size().reset_index(name="Count")
     g["ColorKey"] = g["Priority"] + "|" + g[status_col]
@@ -346,12 +647,19 @@ def open_stacked_chart(df: pd.DataFrame, status_col: str, title: str, chart_key:
     )
     fig.update_layout(barmode="stack", showlegend=False)
     fig.update_traces(textposition="inside")
+    return fig
+
+
+def open_stacked_chart(df: pd.DataFrame, status_col: str, title: str, chart_key: str):
+    fig = build_open_stacked_figure(df, status_col, title)
+    if fig is None:
+        thumb_card("0 pending tickets")
+        return
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
-def closed_pie_chart(df: pd.DataFrame, title: str, chart_key: str):
+def build_closed_pie_figure(df: pd.DataFrame, title: str):
     if df.empty:
-        thumb_card("0 closed tickets")
-        return
+        return None
 
     g = df.groupby("Priority").size().reset_index(name="Count")
     fig = px.pie(
@@ -363,12 +671,19 @@ def closed_pie_chart(df: pd.DataFrame, title: str, chart_key: str):
         color_discrete_map=PRIORITY_COLORS,
         hole=0.35,
     )
+    return fig
+
+
+def closed_pie_chart(df: pd.DataFrame, title: str, chart_key: str):
+    fig = build_closed_pie_figure(df, title)
+    if fig is None:
+        thumb_card("0 closed tickets")
+        return
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
-def assigned_to_bars_stacked_by_priority(df_all: pd.DataFrame, title: str, chart_key: str):
+def build_assigned_to_figure(df_all: pd.DataFrame, title: str):
     if df_all.empty:
-        thumb_card("0 tickets", 260)
-        return
+        return None
 
     g = df_all.groupby(["Assigned To", "Priority"]).size().reset_index(name="Count")
     order = g.groupby("Assigned To")["Count"].sum().sort_values(ascending=False).index
@@ -391,6 +706,14 @@ def assigned_to_bars_stacked_by_priority(df_all: pd.DataFrame, title: str, chart
         margin=dict(l=140, r=40, t=60, b=40),
     )
     fig.update_traces(textposition="outside", textangle=0, cliponaxis=False)
+    return fig
+
+
+def assigned_to_bars_stacked_by_priority(df_all: pd.DataFrame, title: str, chart_key: str):
+    fig = build_assigned_to_figure(df_all, title)
+    if fig is None:
+        thumb_card("0 tickets", 260)
+        return
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
 def apply_complaints_normalization(allg: pd.DataFrame) -> pd.DataFrame:
@@ -448,17 +771,15 @@ def build_trend_data(data_by_sheet: dict[str, pd.DataFrame], period: str, date_l
     return apply_complaints_normalization(allg)
 
 
-def render_trend_chart(
+def build_trend_figure(
     data_by_sheet: dict[str, pd.DataFrame],
     period: str,
     date_label: str,
     title: str,
-    chart_key: str,
 ):
     allg = build_trend_data(data_by_sheet, period, date_label)
     if allg.empty:
-        st.info("No trend data available.")
-        return
+        return None
     plot_data = allg.copy()
     plot_data["RawCount"] = plot_data["Count"]
     plot_data["Count"] = plot_data["PlotCount"]
@@ -468,11 +789,26 @@ def render_trend_chart(
         x=date_label,
         y="Count",
         color="Type",
+        color_discrete_map=TYPE_COLORS,
         markers=True,
         title=title,
         hover_data={"RawCount": False, "Count": True},
     )
     fig.update_yaxes(title_text="Count")
+    return fig
+
+
+def render_trend_chart(
+    data_by_sheet: dict[str, pd.DataFrame],
+    period: str,
+    date_label: str,
+    title: str,
+    chart_key: str,
+):
+    fig = build_trend_figure(data_by_sheet, period, date_label, title)
+    if fig is None:
+        st.info("No trend data available.")
+        return
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
 
@@ -485,6 +821,14 @@ def daily_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
 
 
 def weekday_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
+    fig = build_weekday_trend_figure(data_by_sheet)
+    if fig is None:
+        st.info("No trend data available.")
+        return
+    st.plotly_chart(fig, use_container_width=True, key="trend-weekday")
+
+
+def build_weekday_trend_figure(data_by_sheet: dict[str, pd.DataFrame]):
     weekday_order = [
         "Monday",
         "Tuesday",
@@ -508,8 +852,7 @@ def weekday_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
         rows.append(g)
 
     if not rows:
-        st.info("No trend data available.")
-        return
+        return None
 
     allg = pd.concat(rows, ignore_index=True)
     allg["Weekday"] = pd.Categorical(allg["Weekday"], categories=weekday_order, ordered=True)
@@ -530,7 +873,45 @@ def weekday_trend_chart(data_by_sheet: dict[str, pd.DataFrame]):
     )
     fig.update_yaxes(title_text="Count")
     fig.update_traces(textposition="outside", cliponaxis=False)
-    st.plotly_chart(fig, use_container_width=True, key="trend-weekday")
+    return fig
+
+
+def build_assignee_frame(data_by_sheet: dict[str, pd.DataFrame], closed: bool) -> pd.DataFrame:
+    combined = []
+    for name in SHEETS:
+        status_col = SHEETS[name]["status_col"]
+        df_filtered = filter_closed(data_by_sheet[name], status_col) if closed else filter_not_closed(data_by_sheet[name], status_col)
+        if not df_filtered.empty and "Assigned To" in df_filtered.columns:
+            combined.append(df_filtered[["Assigned To", "Priority"]])
+    return pd.concat(combined, ignore_index=True) if combined else pd.DataFrame()
+
+
+def build_tickets_report_pdf(filtered_data: dict[str, pd.DataFrame], filters: dict[str, object]) -> bytes:
+    styles = get_pdf_styles()
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        leftMargin=0.4 * inch,
+        rightMargin=0.4 * inch,
+        topMargin=0.45 * inch,
+        bottomMargin=0.45 * inch,
+    )
+
+    appendix_sections = [("Work Orders", filtered_data["Work Orders"]), ("Request", filtered_data["Request"]), ("Complaints", filtered_data["Complaints"])]
+    story = []
+    for index, (section_name, section_df) in enumerate(appendix_sections):
+        if index > 0:
+            story.append(PageBreak())
+        build_report_header(story, styles, section_name, filters)
+        story.append(build_section_divider())
+        if section_df.empty:
+            story.append(Paragraph("No rows match the active filters.", styles["body"]))
+        else:
+            story.append(build_report_table(section_name, section_df))
+
+    doc.build(story)
+    return buffer.getvalue()
 
 # ==========================================
 # LOAD DATA (auto-refresh every 30 minutes)
@@ -564,6 +945,28 @@ filtered_data = {
     name: apply_sidebar_filters(df, sidebar_filters)
     for name, df in prepared_data.items()
 }
+current_filters_signature = filters_signature(sidebar_filters)
+if st.session_state.get("tickets_report_filters") != current_filters_signature:
+    st.session_state.pop("tickets_report_pdf", None)
+    st.session_state["tickets_report_filters"] = current_filters_signature
+
+st.sidebar.divider()
+st.sidebar.subheader("PDF Report")
+if st.sidebar.button("Prepare PDF report", key="prepare-tickets-pdf"):
+    with st.spinner("Generating PDF report..."):
+        st.session_state["tickets_report_pdf"] = build_tickets_report_pdf(filtered_data, sidebar_filters)
+
+sidebar_pdf_bytes = st.session_state.get("tickets_report_pdf")
+if sidebar_pdf_bytes:
+    st.sidebar.download_button(
+        "Download PDF report",
+        data=sidebar_pdf_bytes,
+        file_name="tickets_report.pdf",
+        mime="application/pdf",
+        key="download-tickets-pdf",
+    )
+else:
+    st.sidebar.caption("Prepare the report to enable the download.")
 
 # ==========================================
 # UI ORDER
@@ -614,25 +1017,11 @@ st.header("Assignees")
 tab_a_open, tab_a_closed = st.tabs(["Open", "Closed"])
 
 with tab_a_open:
-    open_combined = []
-    for name in SHEETS:
-        status_col = SHEETS[name]["status_col"]
-        df_nc = filter_not_closed(filtered_data[name], status_col)
-        if not df_nc.empty and "Assigned To" in df_nc.columns:
-            open_combined.append(df_nc[["Assigned To", "Priority"]])
-
-    df_open_all = pd.concat(open_combined, ignore_index=True) if open_combined else pd.DataFrame()
+    df_open_all = build_assignee_frame(filtered_data, closed=False)
     assigned_to_bars_stacked_by_priority(df_open_all, "Assignees", "assignees-open")
 
 with tab_a_closed:
-    closed_combined = []
-    for name in SHEETS:
-        status_col = SHEETS[name]["status_col"]
-        df_c = filter_closed(filtered_data[name], status_col)
-        if not df_c.empty and "Assigned To" in df_c.columns:
-            closed_combined.append(df_c[["Assigned To", "Priority"]])
-
-    df_closed_all = pd.concat(closed_combined, ignore_index=True) if closed_combined else pd.DataFrame()
+    df_closed_all = build_assignee_frame(filtered_data, closed=True)
     assigned_to_bars_stacked_by_priority(df_closed_all, "Assignees", "assignees-closed")
 
 # -------------------------------------------------------------------
