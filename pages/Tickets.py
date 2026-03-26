@@ -768,7 +768,7 @@ def build_trend_data(data_by_sheet: dict[str, pd.DataFrame], period: str, date_l
 
     allg = pd.concat(rows, ignore_index=True)
     allg = allg.sort_values(["Type", date_label]).reset_index(drop=True)
-    return apply_complaints_normalization(allg)
+    return allg
 
 
 def build_trend_figure(
@@ -777,12 +777,9 @@ def build_trend_figure(
     date_label: str,
     title: str,
 ):
-    allg = build_trend_data(data_by_sheet, period, date_label)
-    if allg.empty:
+    plot_data = build_trend_data(data_by_sheet, period, date_label)
+    if plot_data.empty:
         return None
-    plot_data = allg.copy()
-    plot_data["RawCount"] = plot_data["Count"]
-    plot_data["Count"] = plot_data["PlotCount"]
 
     fig = px.line(
         plot_data,
@@ -792,7 +789,6 @@ def build_trend_figure(
         color_discrete_map=TYPE_COLORS,
         markers=True,
         title=title,
-        hover_data={"RawCount": False, "Count": True},
     )
     fig.update_yaxes(title_text="Count")
     return fig
@@ -857,10 +853,7 @@ def build_weekday_trend_figure(data_by_sheet: dict[str, pd.DataFrame]):
     allg = pd.concat(rows, ignore_index=True)
     allg["Weekday"] = pd.Categorical(allg["Weekday"], categories=weekday_order, ordered=True)
     allg = allg.sort_values(["Type", "Weekday"]).reset_index(drop=True)
-    normalized = apply_complaints_normalization(allg)
-    plot_data = normalized.copy()
-    plot_data["RawCount"] = plot_data["Count"]
-    plot_data["Count"] = plot_data["PlotCount"]
+    plot_data = allg.copy()
     fig = px.bar(
         plot_data,
         x="Weekday",
@@ -869,7 +862,6 @@ def build_weekday_trend_figure(data_by_sheet: dict[str, pd.DataFrame]):
         barmode="group",
         title="Tickets by weekday",
         text="Count",
-        hover_data={"RawCount": False, "Count": True},
     )
     fig.update_yaxes(title_text="Count")
     fig.update_traces(textposition="outside", cliponaxis=False)
