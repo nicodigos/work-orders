@@ -36,6 +36,7 @@ START_MONTH = 3
 
 SHEET_ONESHOT = "Billing Info Oneshot"
 ONESHOT_MARKER = "Vendor Company"
+EXCEL_EXTENSIONS = (".xlsx", ".xlsm")
 
 # ==========================================
 # STATUS COLOR REGISTRY
@@ -164,14 +165,15 @@ def list_excel_files(base_dir: str):
             children = list_children_by_path(drive_id, month_path, token)
 
             for ch in children:
-                if is_file(ch) and ch["name"].lower().endswith(".xlsx"):
+                file_name = str(ch["name"])
+                if is_file(ch) and file_name.lower().endswith(EXCEL_EXTENSIONS):
                     results.append(
                         {
                             "drive_id": drive_id,
                             "item_id": ch["id"],
                             "year": year_int,
                             "month": m["name"],
-                            "name": ch["name"],
+                            "name": file_name,
                             "web_url": ch.get("webUrl"),
                         }
                     )
@@ -181,6 +183,10 @@ def list_excel_files(base_dir: str):
 # ==========================================
 # UI
 # ==========================================
+if st.sidebar.button("Refresh file list", key="pagos_periodos_refresh_file_list"):
+    list_excel_files.clear()
+    st.rerun()
+
 files = list_excel_files(BASE_SP_DIR)
 
 def route_label(file_item: dict) -> str:

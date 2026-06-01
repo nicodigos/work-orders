@@ -63,6 +63,5 @@ st.markdown(
     """
     **Refresh policy (handled in pages):**
     - Tickets: every 30 minutes
-    - Banks Periodics: every 3 hours
     """
 )
